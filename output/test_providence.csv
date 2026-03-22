@@ -1,0 +1,11 @@
+address,city,state,zip,price,beds,baths,sqft,lat,lon,url,flags,district,elem,mid,high
+55 Dorrance St,Providence,RI,02903,,,,,41.823837,-71.412155,https://www.realtor.com/rentals/details/55-Dorrance-St_Providence_RI_02903_M95292-55445,,Providence School District,6.2,6.0,6.6
+0 Potters Ave Unit 1,Providence,RI,02905,900.0,1.0,1.0,,,,https://www.realtor.com/rentals/details/0-Potters-Ave-Unit-1_Providence_RI_02905_M98782-45350,UNIT|MULTI,,,,
+34 Benefit St,Providence,RI,02904,,,,,41.83292,-71.41004,https://www.realtor.com/rentals/details/34-Benefit-St_Providence_RI_02904_M96548-15550,,Providence School District,6.3,6.5,6.7
+110 Benefit St,Providence,RI,02903,,,,,41.830401,-71.409136,https://www.realtor.com/rentals/details/110-Benefit-St_Providence_RI_02903_M97303-18351,,Providence School District,6.3,6.5,6.7
+136 Irving Ave Apt 3,Warwick,RI,02906,1975.0,2.0,1.0,,41.833706,-71.387238,https://www.realtor.com/rentals/details/136-Irving-Ave-Apt-3_Providence_RI_02906_M92688-55421,UNIT|MULTI,Providence School District,5.9,5.3,6.7
+142 9th St,Providence,RI,02906,2200.0,2.0,1.0,1100.0,41.853603,-71.395058,https://www.realtor.com/rentals/details/142-9th-St_Providence_RI_02906_M90622-97655,,Providence School District,6.1,5.6,7.2
+109 Bowen St Apt 3,Providence,RI,02906,1575.0,1.0,1.0,,41.830364,-71.406296,https://www.realtor.com/rentals/details/109-Bowen-St-Apt-3_Providence_RI_02906_M93881-69964,UNIT|MULTI,Providence School District,6.3,6.5,6.7
+53 Sterling Ave Unit 1/23,Providence,RI,02909,1775.0,2.0,1.0,840.0,41.811771,-71.445557,https://www.realtor.com/rentals/details/53-Sterling-Ave-12_Providence_RI_02909_M93218-16694,UNIT,Providence School District,6.4,6.3,6.6
+1402 Westminster St Unit 1R,Providence,RI,02909,1450.0,1.0,1.0,400.0,41.816269,-71.432571,https://www.realtor.com/rentals/details/1402-Westminster-St-1R_Providence_RI_02909_M97998-38680,UNIT,Providence School District,6.2,6.0,6.6
+12 Eagle St Unit 12-515,Providence,RI,02908,2220.0,2.0,2.0,1051.0,41.827106,-71.435989,https://www.realtor.com/rentals/details/12-Eagle-St-12-515_Providence_RI_02908_M97863-69928,UNIT,Providence School District,6.4,6.5,6.6

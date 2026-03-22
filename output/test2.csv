@@ -1,0 +1,6 @@
+address,city,state,zip,price,beds,baths,sqft,lat,lon,url,flags,district,district_grades,elem,mid,high,top_school,top_rating,school_count
+55 Dorrance St,Providence,RI,02903,,,,,41.823837,-71.412155,https://www.realtor.com/rentals/details/55-Dorrance-St_Providence_RI_02903_M95292-55445,,Providence School District,PK-12,6.2,6.0,6.6,Classical High School,10.0,24
+0 Potters Ave Unit 1,Providence,RI,02905,900.0,1.0,1.0,,,,https://www.realtor.com/rentals/details/0-Potters-Ave-Unit-1_Providence_RI_02905_M98782-45350,UNIT|MULTI,,,,,,,,0
+34 Benefit St,Providence,RI,02904,,,,,41.83292,-71.41004,https://www.realtor.com/rentals/details/34-Benefit-St_Providence_RI_02904_M96548-15550,,Providence School District,PK-12,6.3,6.5,6.7,Classical High School,10.0,24
+110 Benefit St,Providence,RI,02903,,,,,41.830401,-71.409136,https://www.realtor.com/rentals/details/110-Benefit-St_Providence_RI_02903_M97303-18351,,Providence School District,PK-12,6.3,6.5,6.7,Classical High School,10.0,24
+136 Irving Ave Apt 3,Warwick,RI,02906,1975.0,2.0,1.0,,41.833706,-71.387238,https://www.realtor.com/rentals/details/136-Irving-Ave-Apt-3_Providence_RI_02906_M92688-55421,UNIT|MULTI,Providence School District,PK-12,5.9,5.3,6.7,Classical High School,10.0,24

@@ -1,0 +1,23 @@
+name: rental-search
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Core
+  - python=3.11
+  - pandas>=2.0
+  - geopandas>=0.14
+  - shapely>=2.0
+  - requests>=2.28
+
+  # Mapping
+  - folium>=0.15
+
+  # Web UI
+  - streamlit>=1.29
+
+  # Pip-only packages
+  - pip
+  - pip:
+    - homeharvest>=0.3.0
+    - streamlit-folium>=0.15.0

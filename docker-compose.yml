@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # Web UI (default)
+  web:
+    build: .
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    environment:
+      - PROJ_DATA=/opt/conda/envs/rental-search/share/proj
+    volumes:
+      - ./data:/app/data:ro
+
+  # CLI for one-off searches
+  # Usage: docker-compose run --rm cli "Providence, RI" --limit 50
+  cli:
+    build: .
+    environment:
+      - PROJ_DATA=/opt/conda/envs/rental-search/share/proj
+    volumes:
+      - ./data:/app/data:ro
+      - ./output:/app/output
+    working_dir: /app/output
+    entrypoint: ["python", "/app/search.py"]
+    profiles:
+      - cli

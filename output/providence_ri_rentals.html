@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_2080d96e880ea1fe550d3681749cbf6e {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+        <div style="position: fixed; top: 10px; left: 50px; z-index: 1000;
+                    background: white; padding: 10px; border-radius: 5px;
+                    box-shadow: 2px 2px 5px rgba(0,0,0,0.3);">
+            <b>Rentals: Providence, RI</b> | 5 listings
+        </div>
+    
+    
+        <div style="position: fixed; bottom: 30px; right: 30px; z-index: 1000;
+                    background: white; padding: 10px; border-radius: 5px;
+                    box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-size: 12px;">
+            <b>School Rating</b><br>
+            <span style="color: #228B22;">&#9679;</span> 8+ Excellent<br>
+            <span style="color: #32CD32;">&#9679;</span> 7-8 Good<br>
+            <span style="color: #FFA500;">&#9679;</span> 6-7 Average<br>
+            <span style="color: #FF6347;">&#9679;</span> 5-6 Below Avg<br>
+            <span style="color: #DC143C;">&#9679;</span> &lt;5 Poor<br>
+            <span style="color: #888;">&#9679;</span> No data<br>
+            <b>---</b><br>
+            Dashed = Has flags
+        </div>
+    
+    
+            <div class="folium-map" id="map_2080d96e880ea1fe550d3681749cbf6e" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_2080d96e880ea1fe550d3681749cbf6e = L.map(
+                "map_2080d96e880ea1fe550d3681749cbf6e",
+                {
+                    center: [41.824573, -71.41642775],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 11,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_a4323456fd37f82ee1ecdd182e38849d = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_a4323456fd37f82ee1ecdd182e38849d.addTo(map_2080d96e880ea1fe550d3681749cbf6e);
+        
+    
+            var marker_82d438e7d48786e7d322d2963a5ffc12 = L.marker(
+                [41.823837, -71.412155],
+                {
+}
+            ).addTo(map_2080d96e880ea1fe550d3681749cbf6e);
+        
+    
+            var div_icon_daa921d21e04b85a8e42049d6f6fa1d9 = L.divIcon({
+  "html": "\n        \u003cdiv style=\"\n            background-color: #FFA500;\n            border: 2px solid white;\n            border-radius: 50%;\n            width: 32px;\n            height: 32px;\n            display: flex;\n            align-items: center;\n            justify-content: center;\n            font-size: 10px;\n            font-weight: bold;\n            color: white;\n            text-shadow: 1px 1px 1px black;\n            box-shadow: 2px 2px 4px rgba(0,0,0,0.3);\n            opacity: 0.9;\n        \"\u003enan\u003c/div\u003e\n        ",
+  "iconSize": [32, 32],
+  "iconAnchor": [16, 16],
+  "className": "empty",
+});
+        
+    
+        var popup_b3106c4f9c506a601074b42c599adffd = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_1b9e30b7c925ed99b6323b1bd5458d71 = $(`<div id="html_1b9e30b7c925ed99b6323b1bd5458d71" style="width: 100.0%; height: 100.0%;">         <div style="min-width: 220px;">             <b>55 Dorrance St</b><br>             Providence, RI 02903<br>             <hr style="margin: 5px 0;">             <b>$nan/mo</b> | nanbd/nanba | nan sqft<br>             <hr style="margin: 5px 0;">             <b>Schools (24 nearby):</b><br>             Elementary: 6.2/10<br>             Middle: 6.0/10<br>             High: 6.6/10<br>             <b>Top School:</b> Classical High School (10.0/10)<br>District: Providence School District (PK-12)<br>                          <hr style="margin: 5px 0;">             <a href="https://www.realtor.com/rentals/details/55-Dorrance-St_Providence_RI_02903_M95292-55445" target="_blank">View Listing</a>         </div>         </div>`)[0];
+                popup_b3106c4f9c506a601074b42c599adffd.setContent(html_1b9e30b7c925ed99b6323b1bd5458d71);
+            
+        
+
+        marker_82d438e7d48786e7d322d2963a5ffc12.bindPopup(popup_b3106c4f9c506a601074b42c599adffd)
+        ;
+
+        
+    
+    
+            marker_82d438e7d48786e7d322d2963a5ffc12.bindTooltip(
+                `<div>
+                     $nan | nanbd | Elem:6.2
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_82d438e7d48786e7d322d2963a5ffc12.setIcon(div_icon_daa921d21e04b85a8e42049d6f6fa1d9);
+            
+    
+            var marker_da61fb6874bbb78826a234e46c6bbe9e = L.marker(
+                [41.811134, -71.43438],
+                {
+}
+            ).addTo(map_2080d96e880ea1fe550d3681749cbf6e);
+        
+    
+            var div_icon_dc5bef03b8b929501a527f9595820bd7 = L.divIcon({
+  "html": "\n        \u003cdiv style=\"\n            background-color: #FFA500;\n            border: 2px dashed #666;\n            border-radius: 50%;\n            width: 32px;\n            height: 32px;\n            display: flex;\n            align-items: center;\n            justify-content: center;\n            font-size: 10px;\n            font-weight: bold;\n            color: white;\n            text-shadow: 1px 1px 1px black;\n            box-shadow: 2px 2px 4px rgba(0,0,0,0.3);\n            opacity: 0.6;\n        \"\u003e1.9\u003c/div\u003e\n        ",
+  "iconSize": [32, 32],
+  "iconAnchor": [16, 16],
+  "className": "empty",
+});
+        
+    
+        var popup_35c8c379b0cc407549c2a38387e85c82 = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_eccbb6c7bed816527881a3546d98d095 = $(`<div id="html_eccbb6c7bed816527881a3546d98d095" style="width: 100.0%; height: 100.0%;">         <div style="min-width: 220px;">             <b>79 Wendell St Apt 2</b><br>             Providence, RI 02909<br>             <hr style="margin: 5px 0;">             <b>$1,850.0/mo</b> | 2.0bd/1.0ba | 1900.0 sqft<br>             <hr style="margin: 5px 0;">             <b>Schools (24 nearby):</b><br>             Elementary: 6.2/10<br>             Middle: 6.3/10<br>             High: 6.6/10<br>             <b>Top School:</b> Classical High School (10.0/10)<br>District: Providence School District (PK-12)<br>             <hr style="margin: 5px 0;"><b style="color:red;">&#9888; UNIT</b><br>             <hr style="margin: 5px 0;">             <a href="https://www.realtor.com/rentals/details/79-Wendell-St-Apt-2_Providence_RI_02909_M95095-84711" target="_blank">View Listing</a>         </div>         </div>`)[0];
+                popup_35c8c379b0cc407549c2a38387e85c82.setContent(html_eccbb6c7bed816527881a3546d98d095);
+            
+        
+
+        marker_da61fb6874bbb78826a234e46c6bbe9e.bindPopup(popup_35c8c379b0cc407549c2a38387e85c82)
+        ;
+
+        
+    
+    
+            marker_da61fb6874bbb78826a234e46c6bbe9e.bindTooltip(
+                `<div>
+                     $1,850.0 | 2.0bd | Elem:6.2
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_da61fb6874bbb78826a234e46c6bbe9e.setIcon(div_icon_dc5bef03b8b929501a527f9595820bd7);
+            
+    
+            var marker_3db3dacca78e4b75ccaf243cc4035190 = L.marker(
+                [41.830401, -71.409136],
+                {
+}
+            ).addTo(map_2080d96e880ea1fe550d3681749cbf6e);
+        
+    
+            var div_icon_97dbf5313caba50b19286552d24444a2 = L.divIcon({
+  "html": "\n        \u003cdiv style=\"\n            background-color: #FFA500;\n            border: 2px solid white;\n            border-radius: 50%;\n            width: 32px;\n            height: 32px;\n            display: flex;\n            align-items: center;\n            justify-content: center;\n            font-size: 10px;\n            font-weight: bold;\n            color: white;\n            text-shadow: 1px 1px 1px black;\n            box-shadow: 2px 2px 4px rgba(0,0,0,0.3);\n            opacity: 0.9;\n        \"\u003enan\u003c/div\u003e\n        ",
+  "iconSize": [32, 32],
+  "iconAnchor": [16, 16],
+  "className": "empty",
+});
+        
+    
+        var popup_9d25b9a7cc18f94165802fa87424c7f9 = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_5020eb1b00855684e472913555766efa = $(`<div id="html_5020eb1b00855684e472913555766efa" style="width: 100.0%; height: 100.0%;">         <div style="min-width: 220px;">             <b>110 Benefit St</b><br>             Providence, RI 02903<br>             <hr style="margin: 5px 0;">             <b>$nan/mo</b> | nanbd/nanba | nan sqft<br>             <hr style="margin: 5px 0;">             <b>Schools (24 nearby):</b><br>             Elementary: 6.3/10<br>             Middle: 6.5/10<br>             High: 6.7/10<br>             <b>Top School:</b> Classical High School (10.0/10)<br>District: Providence School District (PK-12)<br>                          <hr style="margin: 5px 0;">             <a href="https://www.realtor.com/rentals/details/110-Benefit-St_Providence_RI_02903_M97303-18351" target="_blank">View Listing</a>         </div>         </div>`)[0];
+                popup_9d25b9a7cc18f94165802fa87424c7f9.setContent(html_5020eb1b00855684e472913555766efa);
+            
+        
+
+        marker_3db3dacca78e4b75ccaf243cc4035190.bindPopup(popup_9d25b9a7cc18f94165802fa87424c7f9)
+        ;
+
+        
+    
+    
+            marker_3db3dacca78e4b75ccaf243cc4035190.bindTooltip(
+                `<div>
+                     $nan | nanbd | Elem:6.3
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_3db3dacca78e4b75ccaf243cc4035190.setIcon(div_icon_97dbf5313caba50b19286552d24444a2);
+            
+    
+            var marker_cbd06f4c82558e963488596e3e2c5987 = L.marker(
+                [41.83292, -71.41004],
+                {
+}
+            ).addTo(map_2080d96e880ea1fe550d3681749cbf6e);
+        
+    
+            var div_icon_826862d2843ca2475f1e48c8e55a4f54 = L.divIcon({
+  "html": "\n        \u003cdiv style=\"\n            background-color: #FFA500;\n            border: 2px solid white;\n            border-radius: 50%;\n            width: 32px;\n            height: 32px;\n            display: flex;\n            align-items: center;\n            justify-content: center;\n            font-size: 10px;\n            font-weight: bold;\n            color: white;\n            text-shadow: 1px 1px 1px black;\n            box-shadow: 2px 2px 4px rgba(0,0,0,0.3);\n            opacity: 0.9;\n        \"\u003enan\u003c/div\u003e\n        ",
+  "iconSize": [32, 32],
+  "iconAnchor": [16, 16],
+  "className": "empty",
+});
+        
+    
+        var popup_bb080ec147959704adb53511136f51b7 = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_4fee5d2e31339a1b6f596519895e4634 = $(`<div id="html_4fee5d2e31339a1b6f596519895e4634" style="width: 100.0%; height: 100.0%;">         <div style="min-width: 220px;">             <b>34 Benefit St</b><br>             Providence, RI 02904<br>             <hr style="margin: 5px 0;">             <b>$nan/mo</b> | nanbd/nanba | nan sqft<br>             <hr style="margin: 5px 0;">             <b>Schools (24 nearby):</b><br>             Elementary: 6.3/10<br>             Middle: 6.5/10<br>             High: 6.7/10<br>             <b>Top School:</b> Classical High School (10.0/10)<br>District: Providence School District (PK-12)<br>                          <hr style="margin: 5px 0;">             <a href="https://www.realtor.com/rentals/details/34-Benefit-St_Providence_RI_02904_M96548-15550" target="_blank">View Listing</a>         </div>         </div>`)[0];
+                popup_bb080ec147959704adb53511136f51b7.setContent(html_4fee5d2e31339a1b6f596519895e4634);
+            
+        
+
+        marker_cbd06f4c82558e963488596e3e2c5987.bindPopup(popup_bb080ec147959704adb53511136f51b7)
+        ;
+
+        
+    
+    
+            marker_cbd06f4c82558e963488596e3e2c5987.bindTooltip(
+                `<div>
+                     $nan | nanbd | Elem:6.3
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_cbd06f4c82558e963488596e3e2c5987.setIcon(div_icon_826862d2843ca2475f1e48c8e55a4f54);
+            
+</script>
+</html>

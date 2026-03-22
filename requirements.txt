@@ -1,0 +1,13 @@
+# Core
+homeharvest>=0.3.0
+pandas>=2.0.0
+geopandas>=0.14.0
+shapely>=2.0.0
+requests>=2.28.0
+
+# Mapping
+folium>=0.15.0
+
+# Web UI
+streamlit>=1.29.0
+streamlit-folium>=0.15.0
