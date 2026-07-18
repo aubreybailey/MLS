@@ -74,6 +74,40 @@ Options:
 - `{location}_rentals.csv` - Data with school ratings and flags
 - `{location}_rentals.html` - Standalone interactive map (no server needed)
 
+## Daily Notifications (ntfy)
+
+Save a search and get pushed only the **new** matching listings each day via
+[ntfy](https://ntfy.sh).
+
+**Create a saved search:** set your location + filters in the web UI, pick an
+ntfy topic, and click **🔔 Create notification**. It's written to
+`notify/saved_searches.json` (you can also edit that file directly — see
+`notify/saved_searches.example.json`).
+
+**Point at your ntfy server:** the `NTFY_SERVER` env var (default
+`http://192.168.1.4`, default port). Set it in a `.env` file or the environment.
+
+**Run the notifier** (pushes new listings since the last run; first run seeds
+silently):
+
+```bash
+NTFY_SERVER=http://192.168.1.4 docker compose run --rm notify
+docker compose run --rm notify --dry-run   # preview, send nothing
+docker compose run --rm notify --list      # list saved searches
+```
+
+**Schedule it daily** with cron on your server:
+
+```cron
+# 8am daily
+0 8 * * * cd /path/to/MLS && NTFY_SERVER=http://192.168.1.4 docker compose run --rm notify >> notify/notify.log 2>&1
+```
+
+Subscribe to your topic in the ntfy app (or `http://192.168.1.4/<topic>`). The
+`notify` service uses host networking so it can reach an ntfy server on your LAN.
+Dedup state lives in `notify/notify_state.json` (a listing is "new" the first time
+its URL is seen).
+
 ## Warning Flags
 
 Listings are automatically flagged:

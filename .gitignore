@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# User's saved searches + notification dedup state (runtime data)
+notify/saved_searches.json
+notify/notify_state.json

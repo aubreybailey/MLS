@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Northborough 15mi, elem 7+, 2bd under $3500",
+    "location": "Northborough, MA",
+    "radius_miles": 15,
+    "limit": 25,
+    "min_beds": 2,
+    "max_price": 3500,
+    "min_elem": 7,
+    "hide_units": false,
+    "hide_flagged": false,
+    "topic": "rentals-northborough",
+    "tags": ["house"],
+    "priority": "default"
+  }
+]

@@ -17,6 +17,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from search import search_and_enrich
+from notify import add_saved_search, slugify, SAVED_SEARCHES_PATH
 
 try:
     from streamlit_searchbox import st_searchbox
@@ -200,6 +201,41 @@ search_clicked = st.sidebar.button("🔍 Search", type="primary")
 if st.sidebar.button("🔄 Clear Cache"):
     st.cache_data.clear()
     st.rerun()
+
+# --- Saved-search notifications (ntfy) ---
+# "Create notification" saves the CURRENT sidebar settings as a saved search;
+# the daily notify.py job runs it and pushes new matches to the ntfy topic.
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔔 Daily notification")
+_notif_name = location + (f" +{radius}mi" if radius else "")
+if min_elem > 0:
+    _notif_name += f", elem {min_elem:g}+"
+notif_topic = st.sidebar.text_input(
+    "ntfy topic", value=slugify(location),
+    help="New matches get pushed to this ntfy topic daily. Subscribe to it in the ntfy app.")
+if st.sidebar.button("🔔 Create notification"):
+    if not location:
+        st.sidebar.error("Pick a location first.")
+    else:
+        cfg = {
+            "name": _notif_name,
+            "location": location,
+            "radius_miles": radius_miles,
+            "limit": limit,
+            "min_beds": min_beds if min_beds > 0 else None,
+            "max_price": max_price if max_price > 0 else None,
+            "min_elem": min_elem if min_elem > 0 else None,
+            "hide_flagged": hide_flagged,
+            "hide_units": hide_units,
+            "topic": notif_topic or slugify(location),
+        }
+        try:
+            saved = add_saved_search(cfg)
+            st.sidebar.success(
+                f"Saved “{_notif_name}” → topic ‘{cfg['topic']}’. "
+                f"The daily job will push new matches ({len(saved)} saved search(es)).")
+        except Exception as e:
+            st.sidebar.error(f"Couldn't save notification: {e}")
 
 # Initialize session state
 if 'df' not in st.session_state:
