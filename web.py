@@ -165,8 +165,10 @@ if _HAS_SEARCHBOX and load_cities():
 else:
     location = st.sidebar.text_input("Location", value="Providence, RI",
                                      help="City, ST format (e.g., 'Austin, TX')")
-radius = st.sidebar.slider("Search radius (miles)", 0, 25, 0, step=5,
-                            help="0 = city only. >0 searches surrounding zip codes too.")
+radius = st.sidebar.slider("Search radius (miles)", 0, 50, 0, step=5,
+                            help="0 = city only. >0 expands outward to nearby towns "
+                                 "(nearest first) only until the target hits are filled "
+                                 "or this radius is reached.")
 limit = st.sidebar.slider("Target hits", 20, 200, 50, step=10,
                           help="Number of listings that pass the filters below. The search keeps scanning until it finds this many or runs out of listings.")
 

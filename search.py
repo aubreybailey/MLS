@@ -17,7 +17,7 @@ import threading
 import urllib.request
 import json
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 
@@ -104,10 +104,12 @@ def _nominatim_lookup(query_str: str) -> dict:
     return data[0] if data else {}
 
 
-# Caps and time budgets so radius discovery can never hang forever. If the
-# public Overpass/Nominatim servers are slow, we proceed with whatever we got.
-MAX_TOWNS = 15                 # nearest N towns to resolve (bounds fan-out)
-ZIP_DISCOVERY_BUDGET_S = 25    # overall wall-clock cap for per-town zip lookups
+# The radius search expands town-by-town (nearest first) only until the hit
+# quota is filled, so there is no fixed town count. This is just a generous
+# safety ceiling so a strict filter over a dense metro can't try to scrape an
+# unbounded number of towns (and get the scraper IP-blocked); normal searches
+# fill their quota long before reaching it.
+MAX_TOWNS_EXPAND = 60
 _OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
 
@@ -135,13 +137,13 @@ def _resolve_town_zip(name: str, tlat: float, tlon: float, state: str) -> str:
     return code
 
 
-def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str,
-                        verbose: bool = False) -> list:
-    """Return unique zip codes for towns within radius. Hardened against slow/flaky
-    public geocoders: bounded town count, per-call timeouts, parallel resolution,
-    an overall time budget, and graceful degradation (returns [] rather than hanging)."""
+def _towns_within(lat: float, lon: float, radius_miles: float,
+                  verbose: bool = False) -> list:
+    """All town/city nodes within radius as (dist_miles, name, tlat, tlon),
+    sorted nearest-first. One Overpass call with a hard timeout; returns [] on
+    failure so the caller falls back to the primary city only. Zip resolution is
+    deferred to the caller, which resolves towns lazily as it expands outward."""
     radius_m = int(radius_miles * 1609.34)
-    # One Overpass query for nearby town/city nodes (short, hard timeout).
     query = (f'[out:json][timeout:20];'
              f'(node["place"~"^(city|town)$"](around:{radius_m},{lat},{lon}););'
              f'out body;')
@@ -152,7 +154,6 @@ def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str,
             print("  Overpass town lookup failed/timed out; searching primary city only.")
         return []
 
-    # Keep only named town nodes, then take the nearest MAX_TOWNS to bound work.
     towns = []
     for el in result.get('elements', []):
         name = el.get('tags', {}).get('name', '')
@@ -160,28 +161,7 @@ def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str,
         if name and tlat is not None and tlon is not None:
             towns.append((haversine_miles(lat, lon, tlat, tlon), name, tlat, tlon))
     towns.sort(key=lambda t: t[0])
-    towns = towns[:MAX_TOWNS]
-
-    # Resolve zips in parallel, but stop honoring results past the time budget.
-    seen, zips = set(), []
-    deadline = time.monotonic() + ZIP_DISCOVERY_BUDGET_S
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(_resolve_town_zip, n, la, lo, state): n
-                   for _, n, la, lo in towns}
-        for fut in as_completed(futures):
-            if time.monotonic() > deadline:
-                if verbose:
-                    print(f"  Zip discovery hit {ZIP_DISCOVERY_BUDGET_S}s budget; "
-                          f"proceeding with {len(zips)} zip(s).")
-                break
-            try:
-                code = fut.result(timeout=max(0.1, deadline - time.monotonic()))
-            except Exception:
-                code = ''
-            if code and code not in seen:
-                seen.add(code)
-                zips.append(code)
-    return zips
+    return towns
 
 
 def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
@@ -307,103 +287,102 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
                       verbose: bool = True) -> pd.DataFrame:
     """Search rentals and enrich with school ratings and warning flags.
 
-    `limit` is a quota of listings that PASS the filters: listings are
-    enriched in discovery order and non-matches discarded until `limit` hits
-    are collected or the pool is exhausted. Scan stats are attached as
-    df.attrs (scanned/pool/limit/matched) so callers can report shortfalls."""
-    center_lat, center_lon, state = None, None, None
-
-    # For radius searches: geocode center, find nearby zip codes, search each
-    locations_to_search = [location]
+    `limit` is a quota of listings that PASS the filters. Listings are enriched
+    in discovery order and non-matches discarded until `limit` hits are collected
+    or the search is exhausted. For radius searches the town count is NOT fixed up
+    front: towns within the radius are streamed in nearest-first and the search
+    expands to more towns only until the quota is filled (or the radius runs out).
+    Scan stats are attached as df.attrs (scanned/pool/limit/matched/towns_used)
+    so callers can report shortfalls."""
+    center_lat = center_lon = state = None
+    towns = []
     if radius_miles:
         center_lat, center_lon, state = geocode_location(location)
         if center_lat is not None:
-            zipcodes = get_nearby_zipcodes(center_lat, center_lon, radius_miles, state,
-                                           verbose=verbose)
-            locations_to_search.extend(zipcodes)
+            towns = _towns_within(center_lat, center_lon, radius_miles, verbose)[:MAX_TOWNS_EXPAND]
             if verbose:
-                print(f"Searching {location} + {len(zipcodes)} zip codes within {radius_miles} miles")
-        else:
-            if verbose:
-                print(f"Searching rentals in {location}...")
-    else:
-        if verbose:
+                print(f"Searching {location} + up to {len(towns)} towns within "
+                      f"{radius_miles} mi, expanding until {limit} hits...")
+        elif verbose:
             print(f"Searching rentals in {location}...")
+    elif verbose:
+        print(f"Searching rentals in {location}...")
 
-    all_dfs = []
-    for loc in locations_to_search:
-        try:
-            df = scrape_property(location=loc, listing_type='for_rent', past_days=30)
-            if not df.empty:
-                all_dfs.append(df)
-                if verbose and radius_miles:
-                    print(f"  {loc}: {len(df)} listings")
-        except Exception as e:
-            if verbose:
-                print(f"  {loc}: skipped ({e})")
+    seen = set()                       # dedup listings across the city + overlapping zips
+    ratings_cache, cache_lock = {}, threading.Lock()
+    hits, scanned, pool, towns_used = [], 0, 0, 0
 
-    if not all_dfs:
-        print("No listings found.")
-        df = pd.DataFrame()
-        df.attrs.update(scanned=0, pool=0, limit=limit, matched=0)
-        return df
+    def _location_stream():
+        """Primary city first, then towns nearest->farthest. Each town's zip is
+        resolved lazily (only once we reach it), falling back to 'Town, ST'."""
+        yield location, None
+        for dist, name, tlat, tlon in towns:
+            code = _resolve_town_zip(name, tlat, tlon, state)
+            yield (code or f"{name}, {state}"), dist
 
-    raw_df = pd.concat(all_dfs, ignore_index=True)
-    if 'full_street_line' in raw_df.columns and 'city' in raw_df.columns:
-        raw_df = raw_df.drop_duplicates(subset=['full_street_line', 'city'])
-
-    if verbose:
-        print(f"Found {len(raw_df)} total listings")
-
-    if min_beds:
-        raw_df = raw_df[raw_df['beds'] >= min_beds]
-    if max_price:
-        raw_df = raw_df[raw_df['list_price'] <= max_price]
-
-    if radius_miles and center_lat is not None:
-        mask = raw_df.apply(
-            lambda r: pd.notna(r.get('latitude')) and pd.notna(r.get('longitude')) and
-                      haversine_miles(center_lat, center_lon, float(r['latitude']), float(r['longitude'])) <= radius_miles,
-            axis=1
-        )
-        before = len(raw_df)
-        raw_df = raw_df[mask]
-        if verbose:
-            print(f"Kept {len(raw_df)} listings within {radius_miles} miles (dropped {before - len(raw_df)} outside radius)")
-
-    if verbose:
-        print(f"Scanning up to {len(raw_df)} listings for {limit} that pass filters...")
-
-    # Quota-fill: enrich one chunk at a time in parallel, consume results in
-    # discovery order, and stop as soon as `limit` listings pass the filters.
-    # Overshoot is bounded to one chunk. max_workers stays low because each
-    # cache miss hits GreatSchools; raising it risks rate-limiting.
-    rows = [row for _, row in raw_df.iterrows()]
-    ratings_cache = {}
-    cache_lock = threading.Lock()
-    results = []
-    scanned = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for chunk in _chunks(rows, max_workers):
-            if len(results) >= limit:
-                break
-            enriched = list(ex.map(
-                lambda r: _enrich_row(r, ratings_cache, cache_lock), chunk))
-            for rec in enriched:
-                scanned += 1
-                if not _passes(rec, min_elem, hide_flagged, hide_units):
+    def _prefilter(raw):
+        """Yield rows passing the cheap pre-enrichment filters (beds/price/radius
+        mask), deduped, so school enrichment is only spent on real candidates."""
+        for _, row in raw.iterrows():
+            key = (row.get('full_street_line', row.get('street', '')), row.get('city', ''))
+            if key in seen:
+                continue
+            seen.add(key)
+            if min_beds and not (pd.notna(row.get('beds')) and row['beds'] >= min_beds):
+                continue
+            if max_price and not (pd.notna(row.get('list_price')) and row['list_price'] <= max_price):
+                continue
+            if radius_miles and center_lat is not None:
+                la, lo = row.get('latitude'), row.get('longitude')
+                if not (pd.notna(la) and pd.notna(lo) and
+                        haversine_miles(center_lat, center_lon, float(la), float(lo)) <= radius_miles):
                     continue
-                results.append(rec)
-                if len(results) >= limit:
-                    break
-            if verbose:
-                print(f"  Found {len(results)}/{limit} hits (scanned {scanned}/{len(rows)})...")
+            yield row
 
-    df = pd.DataFrame(results)
+    # Expand outward one location at a time; enrich each location's candidates in
+    # parallel chunks (quota-fill, overshoot bounded to a chunk) and stop the whole
+    # search as soon as `limit` hits are collected.
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for loc, dist in _location_stream():
+            if len(hits) >= limit:
+                break
+            if dist is not None:
+                towns_used += 1
+            try:
+                raw = scrape_property(location=loc, listing_type='for_rent', past_days=30)
+            except Exception as e:
+                if verbose:
+                    print(f"  {loc}: skipped ({e})")
+                continue
+            if raw is None or raw.empty:
+                continue
+            rows = list(_prefilter(raw))
+            pool += len(rows)
+            for chunk in _chunks(rows, max_workers):
+                if len(hits) >= limit:
+                    break
+                enriched = list(ex.map(
+                    lambda r: _enrich_row(r, ratings_cache, cache_lock), chunk))
+                for rec in enriched:
+                    scanned += 1
+                    if not _passes(rec, min_elem, hide_flagged, hide_units):
+                        continue
+                    hits.append(rec)
+                    if len(hits) >= limit:
+                        break
+            if verbose:
+                where = location if dist is None else f"{loc} ({dist:.0f}mi)"
+                print(f"  after {where}: {len(hits)}/{limit} hits (scanned {scanned})")
+
+    if not seen:
+        print("No listings found.")
+
+    df = pd.DataFrame(hits)
     if not df.empty:
         # Hits are collected in discovery order; sort only for display.
         df = df.sort_values('elem', ascending=False, na_position='last')
-    df.attrs.update(scanned=scanned, pool=len(rows), limit=limit, matched=len(df))
+    df.attrs.update(scanned=scanned, pool=pool, limit=limit, matched=len(df),
+                    towns_used=towns_used)
     return df
 
 
