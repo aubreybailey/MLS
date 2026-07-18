@@ -21,3 +21,4 @@ dependencies:
   - pip:
     - homeharvest>=0.3.0
     - streamlit-folium>=0.15.0
+    - streamlit-searchbox>=0.1.0

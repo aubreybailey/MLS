@@ -11,3 +11,4 @@ folium>=0.15.0
 # Web UI
 streamlit>=1.29.0
 streamlit-folium>=0.15.0
+streamlit-searchbox>=0.1.0

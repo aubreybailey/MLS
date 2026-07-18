@@ -17,6 +17,7 @@ ENV CONDA_DEFAULT_ENV=rental-search
 COPY scripts/ ./scripts/
 COPY search.py .
 COPY web.py .
+COPY us_cities.csv .
 
 # Expose Streamlit port
 EXPOSE 8501

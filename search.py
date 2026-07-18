@@ -12,6 +12,12 @@ import argparse
 import sys
 import os
 import math
+import time
+import threading
+import urllib.request
+import json
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 
@@ -48,14 +54,42 @@ def get_color(rating):
     else: return '#DC143C'
 
 
+# Nominatim's usage policy caps clients at ~1 request/second and requires an
+# identifying User-Agent. This lock + timestamp enforces that spacing across
+# threads so parallel workers can't stampede the public server.
+_NOMINATIM_UA = 'school-rental-search/1.0 (github.com/MLS rental+school finder)'
+_OVERPASS_UA = _NOMINATIM_UA
+_nominatim_lock = threading.Lock()
+_nominatim_last = [0.0]
+_NOMINATIM_MIN_INTERVAL = 1.1  # seconds between Nominatim calls
+
+
+def _http_get_json(url: str, timeout: float, user_agent: str):
+    """GET a URL and parse JSON, with a hard timeout. Returns None on any failure."""
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': user_agent})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def _nominatim_get(url: str, timeout: float = 8.0):
+    """Rate-limited Nominatim GET (>=1.1s between calls, process-wide)."""
+    with _nominatim_lock:
+        wait = _NOMINATIM_MIN_INTERVAL - (time.monotonic() - _nominatim_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        result = _http_get_json(url, timeout, _NOMINATIM_UA)
+        _nominatim_last[0] = time.monotonic()
+    return result
+
+
 def geocode_location(location: str):
     """Return (lat, lon, state_abbr) for a location string using Nominatim."""
-    import urllib.request, json, urllib.parse
-    query = urllib.parse.quote(location)
-    url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1&addressdetails=1"
-    req = urllib.request.Request(url, headers={'User-Agent': 'rental-search/1.0'})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.loads(r.read())
+    url = (f"https://nominatim.openstreetmap.org/search"
+           f"?q={urllib.parse.quote(location)}&format=json&limit=1&addressdetails=1")
+    data = _nominatim_get(url, timeout=8.0)
     if data:
         addr = data[0].get('address', {})
         state = addr.get('ISO3166-2-lvl4', '').replace('US-', '') or ''
@@ -64,63 +98,89 @@ def geocode_location(location: str):
 
 
 def _nominatim_lookup(query_str: str) -> dict:
-    import urllib.request, json, urllib.parse
     url = (f"https://nominatim.openstreetmap.org/search"
            f"?q={urllib.parse.quote(query_str)}&format=json&limit=1&addressdetails=1")
-    req = urllib.request.Request(url, headers={'User-Agent': 'rental-search/1.0'})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.loads(r.read())
+    data = _nominatim_get(url, timeout=8.0)
     return data[0] if data else {}
+
+
+# Caps and time budgets so radius discovery can never hang forever. If the
+# public Overpass/Nominatim servers are slow, we proceed with whatever we got.
+MAX_TOWNS = 15                 # nearest N towns to resolve (bounds fan-out)
+ZIP_DISCOVERY_BUDGET_S = 25    # overall wall-clock cap for per-town zip lookups
+_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
 
 def _overpass_zip_near(lat: float, lon: float, radius_m: int = 2000) -> str:
     """Find the most common addr:postcode on nodes near a point."""
-    import urllib.request, json, urllib.parse
-    try:
-        query = (f'[out:json][timeout:15];'
-                 f'node["addr:postcode"](around:{radius_m},{lat},{lon});'
-                 f'out tags;')
-        url = f"https://overpass-api.de/api/interpreter?data={urllib.parse.quote(query)}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'rental-search/1.0'})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            els = json.loads(r.read()).get('elements', [])
-        codes = [e['tags']['addr:postcode'] for e in els if 'addr:postcode' in e.get('tags', {})]
-        if codes:
-            return max(set(codes), key=codes.count)
-    except Exception:
-        pass
-    return ''
+    query = (f'[out:json][timeout:10];'
+             f'node["addr:postcode"](around:{radius_m},{lat},{lon});'
+             f'out tags;')
+    url = f"{_OVERPASS_ENDPOINT}?data={urllib.parse.quote(query)}"
+    result = _http_get_json(url, timeout=12.0, user_agent=_OVERPASS_UA)
+    if not result:
+        return ''
+    codes = [e['tags']['addr:postcode'] for e in result.get('elements', [])
+             if 'addr:postcode' in e.get('tags', {})]
+    return max(set(codes), key=codes.count) if codes else ''
 
 
-def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str) -> list:
-    """Return unique zip codes for all cities/towns within radius."""
-    import urllib.request, json, urllib.parse
+def _resolve_town_zip(name: str, tlat: float, tlon: float, state: str) -> str:
+    """Resolve one town to a zip: Overpass postcode nodes first (parallel-safe),
+    Nominatim only as a rate-limited fallback."""
+    code = _overpass_zip_near(tlat, tlon)
+    if not code:
+        nom = _nominatim_lookup(f"{name}, {state}")
+        code = nom.get('address', {}).get('postcode', '')
+    return code
+
+
+def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str,
+                        verbose: bool = False) -> list:
+    """Return unique zip codes for towns within radius. Hardened against slow/flaky
+    public geocoders: bounded town count, per-call timeouts, parallel resolution,
+    an overall time budget, and graceful degradation (returns [] rather than hanging)."""
     radius_m = int(radius_miles * 1609.34)
-    # Get nearby town/city nodes from Overpass
-    query = (f'[out:json][timeout:25];'
+    # One Overpass query for nearby town/city nodes (short, hard timeout).
+    query = (f'[out:json][timeout:20];'
              f'(node["place"~"^(city|town)$"](around:{radius_m},{lat},{lon}););'
              f'out body;')
-    url = f"https://overpass-api.de/api/interpreter?data={urllib.parse.quote(query)}"
-    req = urllib.request.Request(url, headers={'User-Agent': 'rental-search/1.0'})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        result = json.loads(r.read())
+    url = f"{_OVERPASS_ENDPOINT}?data={urllib.parse.quote(query)}"
+    result = _http_get_json(url, timeout=25.0, user_agent=_OVERPASS_UA)
+    if not result:
+        if verbose:
+            print("  Overpass town lookup failed/timed out; searching primary city only.")
+        return []
 
-    seen = set()
-    zips = []
+    # Keep only named town nodes, then take the nearest MAX_TOWNS to bound work.
+    towns = []
     for el in result.get('elements', []):
         name = el.get('tags', {}).get('name', '')
         tlat, tlon = el.get('lat'), el.get('lon')
-        if not name or not tlat:
-            continue
-        # Try Nominatim first for the zip
-        nom = _nominatim_lookup(f"{name}, {state}")
-        code = nom.get('address', {}).get('postcode', '')
-        # Fallback: find nearest addr:postcode node via Overpass
-        if not code and tlat:
-            code = _overpass_zip_near(tlat, tlon)
-        if code and code not in seen:
-            seen.add(code)
-            zips.append(code)
+        if name and tlat is not None and tlon is not None:
+            towns.append((haversine_miles(lat, lon, tlat, tlon), name, tlat, tlon))
+    towns.sort(key=lambda t: t[0])
+    towns = towns[:MAX_TOWNS]
+
+    # Resolve zips in parallel, but stop honoring results past the time budget.
+    seen, zips = set(), []
+    deadline = time.monotonic() + ZIP_DISCOVERY_BUDGET_S
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_resolve_town_zip, n, la, lo, state): n
+                   for _, n, la, lo in towns}
+        for fut in as_completed(futures):
+            if time.monotonic() > deadline:
+                if verbose:
+                    print(f"  Zip discovery hit {ZIP_DISCOVERY_BUDGET_S}s budget; "
+                          f"proceeding with {len(zips)} zip(s).")
+                break
+            try:
+                code = fut.result(timeout=max(0.1, deadline - time.monotonic()))
+            except Exception:
+                code = ''
+            if code and code not in seen:
+                seen.add(code)
+                zips.append(code)
     return zips
 
 
@@ -135,7 +195,8 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
     if radius_miles:
         center_lat, center_lon, state = geocode_location(location)
         if center_lat is not None:
-            zipcodes = get_nearby_zipcodes(center_lat, center_lon, radius_miles, state)
+            zipcodes = get_nearby_zipcodes(center_lat, center_lon, radius_miles, state,
+                                           verbose=verbose)
             locations_to_search.extend(zipcodes)
             if verbose:
                 print(f"Searching {location} + {len(zipcodes)} zip codes within {radius_miles} miles")

@@ -18,7 +18,40 @@ warnings.filterwarnings('ignore')
 
 from search import search_and_enrich
 
+try:
+    from streamlit_searchbox import st_searchbox
+    _HAS_SEARCHBOX = True
+except Exception:
+    _HAS_SEARCHBOX = False
+
 st.set_page_config(page_title="Rental Search", layout="wide")
+
+CITIES_CSV = os.path.join(os.path.dirname(__file__), "us_cities.csv")
+
+
+@st.cache_data
+def load_cities() -> list[str]:
+    """Load bundled US places (Census Gazetteer) as sorted 'City, ST' strings."""
+    try:
+        cdf = pd.read_csv(CITIES_CSV, dtype=str)
+    except Exception:
+        return []
+    labels = (cdf["city"] + ", " + cdf["state"]).dropna().unique().tolist()
+    labels.sort()
+    return labels
+
+
+def search_cities(term: str) -> list[str]:
+    """Search-as-you-type callback: prefix matches first, then substring. Capped."""
+    cities = load_cities()
+    if not term:
+        return cities[:50]
+    t = term.lower()
+    prefix = [c for c in cities if c.lower().startswith(t)]
+    if len(prefix) < 50:
+        substr = [c for c in cities if t in c.lower() and c not in prefix]
+        prefix.extend(substr)
+    return prefix[:50]
 
 
 @st.cache_data(ttl=3600)
@@ -111,9 +144,21 @@ def create_map(df: pd.DataFrame) -> folium.Map:
 st.sidebar.title("🏠 Rental Search")
 st.sidebar.markdown("*School-aware rental finder*")
 
-# Location input
-location = st.sidebar.text_input("Location", value="Providence, RI",
-                                  help="City, ST format (e.g., 'Austin, TX')")
+# Location input — search-as-you-type autocomplete over ~32k real US places,
+# so the chosen location is always a valid "City, ST". Falls back to a plain
+# text box if the streamlit-searchbox component isn't installed.
+if _HAS_SEARCHBOX and load_cities():
+    with st.sidebar:
+        picked = st_searchbox(
+            search_cities,
+            placeholder="Start typing a city… (e.g., Northborough, MA)",
+            default="Providence, RI",
+            key="city_searchbox",
+        )
+    location = picked or st.session_state.get("last_location") or "Providence, RI"
+else:
+    location = st.sidebar.text_input("Location", value="Providence, RI",
+                                     help="City, ST format (e.g., 'Austin, TX')")
 radius = st.sidebar.slider("Search radius (miles)", 0, 25, 0, step=5,
                             help="0 = city only. >0 searches surrounding zip codes too.")
 limit = st.sidebar.slider("Max listings", 20, 200, 50, step=10)
