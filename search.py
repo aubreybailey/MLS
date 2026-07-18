@@ -184,10 +184,133 @@ def get_nearby_zipcodes(lat: float, lon: float, radius_miles: float, state: str,
     return zips
 
 
+def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
+    """Enrich one raw listing row with warning flags and school data.
+
+    Thread-safe: only the shared ratings_cache is mutated, and only under
+    cache_lock. lookup_coords is lru_cache'd (already thread-safe)."""
+    lat, lon = row.get('latitude'), row.get('longitude')
+    sqft, price = row.get('sqft'), row.get('list_price')
+    days_on_mls = row.get('days_on_mls')
+    text = str(row.get('text', '')).lower() if pd.notna(row.get('text')) else ''
+
+    # Build warning flags
+    flags = []
+    if pd.notna(row.get('unit')) and row.get('unit'):
+        flags.append('UNIT')
+    if any(kw in text for kw in ROOM_KEYWORDS):
+        flags.append('ROOM')
+    if pd.notna(sqft) and sqft > 10000:
+        flags.append('SQFT?')
+    if pd.notna(sqft) and pd.notna(price) and sqft > 0 and price / sqft < 0.50:
+        flags.append('PRICE?')
+    if pd.notna(days_on_mls) and days_on_mls > 60:
+        flags.append(f'OLD({int(days_on_mls)}d)')
+    style = str(row.get('style', '')).upper() if pd.notna(row.get('style')) else ''
+    if any(x in style for x in ['CONDO', 'DUPLEX', 'MULTI', 'TRIPLEX']):
+        flags.append('MULTI')
+
+    # Get school data
+    district, district_grades = '', ''
+    elem, mid, high = None, None, None
+    top_school, top_rating = '', None
+    school_count = 0
+
+    if pd.notna(lat) and pd.notna(lon):
+        try:
+            dr = lookup_coords(float(lat), float(lon))
+            if dr and not dr.get('error'):
+                d = dr.get('school_districts', {})
+                if 'unified' in d:
+                    dist_info = d['unified']
+                    district = dist_info.get('name', '')
+                    district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
+                elif 'elementary' in d:
+                    dist_info = d['elementary']
+                    district = dist_info.get('name', '')
+                    district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
+        except Exception:
+            pass
+
+        cache_key = f'{round(float(lat), 2)},{round(float(lon), 2)}'
+        with cache_lock:
+            r = ratings_cache.get(cache_key)
+        if r is None:
+            # Fetch outside the lock; concurrent duplicate fetches of the same
+            # ~1km cell are wasteful but harmless.
+            try:
+                r = get_ratings_by_level(float(lat), float(lon))
+            except Exception:
+                r = {'elementary': {}, 'middle': {}, 'high': {}}
+            with cache_lock:
+                ratings_cache[cache_key] = r
+
+        elem_data = r.get('elementary', {})
+        mid_data = r.get('middle', {})
+        high_data = r.get('high', {})
+
+        elem = elem_data.get('rating')
+        mid = mid_data.get('rating')
+        high = high_data.get('rating')
+
+        # Get top school (highest rated across all levels)
+        for level_data in [elem_data, mid_data, high_data]:
+            if level_data.get('top_rating') and (top_rating is None or level_data['top_rating'] > top_rating):
+                top_school = level_data.get('top_school', '')
+                top_rating = level_data.get('top_rating')
+            school_count += level_data.get('count', 0)
+
+    return {
+        'address': row.get('full_street_line', row.get('street', '')),
+        'city': row.get('city', ''),
+        'state': row.get('state', ''),
+        'zip': row.get('zip_code', ''),
+        'price': int(price) if pd.notna(price) else None,
+        'beds': int(row['beds']) if pd.notna(row.get('beds')) else None,
+        'baths': int(row['full_baths']) if pd.notna(row.get('full_baths')) else None,
+        'sqft': int(sqft) if pd.notna(sqft) else None,
+        'lat': float(lat) if pd.notna(lat) else None,
+        'lon': float(lon) if pd.notna(lon) else None,
+        'url': row.get('property_url', ''),
+        'flags': '|'.join(flags) if flags else '',
+        'district': district,
+        'district_grades': district_grades,
+        'elem': elem,
+        'mid': mid,
+        'high': high,
+        'top_school': top_school,
+        'top_rating': top_rating,
+        'school_count': school_count,
+    }
+
+
+def _passes(rec: dict, min_elem, hide_flagged: bool, hide_units: bool) -> bool:
+    """Does an enriched listing count as a hit under the scan filters?"""
+    if min_elem is not None and (rec['elem'] is None or rec['elem'] < min_elem):
+        return False
+    if hide_flagged and rec['flags']:
+        return False
+    if hide_units and 'UNIT' in rec['flags']:
+        return False
+    return True
+
+
+def _chunks(seq, size):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
-                      max_price: int = None, radius_miles: float = None,
+                      max_price: int = None, min_elem: float = None,
+                      hide_flagged: bool = False, hide_units: bool = False,
+                      radius_miles: float = None, max_workers: int = 8,
                       verbose: bool = True) -> pd.DataFrame:
-    """Search rentals and enrich with school ratings and warning flags."""
+    """Search rentals and enrich with school ratings and warning flags.
+
+    `limit` is a quota of listings that PASS the filters: listings are
+    enriched in discovery order and non-matches discarded until `limit` hits
+    are collected or the pool is exhausted. Scan stats are attached as
+    df.attrs (scanned/pool/limit/matched) so callers can report shortfalls."""
     center_lat, center_lon, state = None, None, None
 
     # For radius searches: geocode center, find nearby zip codes, search each
@@ -221,7 +344,9 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
 
     if not all_dfs:
         print("No listings found.")
-        return pd.DataFrame()
+        df = pd.DataFrame()
+        df.attrs.update(scanned=0, pool=0, limit=limit, matched=0)
+        return df
 
     raw_df = pd.concat(all_dfs, ignore_index=True)
     if 'full_street_line' in raw_df.columns and 'city' in raw_df.columns:
@@ -246,115 +371,39 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
         if verbose:
             print(f"Kept {len(raw_df)} listings within {radius_miles} miles (dropped {before - len(raw_df)} outside radius)")
 
-    # For radius searches enrich all filtered listings, then limit at the end
-    # to avoid cutting off suburb listings that appear after the primary city
-    if not radius_miles:
-        raw_df = raw_df.head(limit)
-
     if verbose:
-        print(f"Processing {len(raw_df)} listings after filters...")
+        print(f"Scanning up to {len(raw_df)} listings for {limit} that pass filters...")
 
+    # Quota-fill: enrich one chunk at a time in parallel, consume results in
+    # discovery order, and stop as soon as `limit` listings pass the filters.
+    # Overshoot is bounded to one chunk. max_workers stays low because each
+    # cache miss hits GreatSchools; raising it risks rate-limiting.
+    rows = [row for _, row in raw_df.iterrows()]
     ratings_cache = {}
+    cache_lock = threading.Lock()
     results = []
-
-    for idx, (_, row) in enumerate(raw_df.iterrows()):
-        if verbose and idx > 0 and idx % 10 == 0:
-            print(f"  Processing {idx}/{len(raw_df)}...")
-
-        lat, lon = row.get('latitude'), row.get('longitude')
-        sqft, price = row.get('sqft'), row.get('list_price')
-        days_on_mls = row.get('days_on_mls')
-        text = str(row.get('text', '')).lower() if pd.notna(row.get('text')) else ''
-
-        # Build warning flags
-        flags = []
-        if pd.notna(row.get('unit')) and row.get('unit'):
-            flags.append('UNIT')
-        if any(kw in text for kw in ROOM_KEYWORDS):
-            flags.append('ROOM')
-        if pd.notna(sqft) and sqft > 10000:
-            flags.append('SQFT?')
-        if pd.notna(sqft) and pd.notna(price) and sqft > 0 and price / sqft < 0.50:
-            flags.append('PRICE?')
-        if pd.notna(days_on_mls) and days_on_mls > 60:
-            flags.append(f'OLD({int(days_on_mls)}d)')
-        style = str(row.get('style', '')).upper() if pd.notna(row.get('style')) else ''
-        if any(x in style for x in ['CONDO', 'DUPLEX', 'MULTI', 'TRIPLEX']):
-            flags.append('MULTI')
-
-        # Get school data
-        district, district_grades = '', ''
-        elem, mid, high = None, None, None
-        top_school, top_rating = '', None
-        school_count = 0
-
-        if pd.notna(lat) and pd.notna(lon):
-            try:
-                dr = lookup_coords(float(lat), float(lon))
-                if dr and not dr.get('error'):
-                    d = dr.get('school_districts', {})
-                    if 'unified' in d:
-                        dist_info = d['unified']
-                        district = dist_info.get('name', '')
-                        district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
-                    elif 'elementary' in d:
-                        dist_info = d['elementary']
-                        district = dist_info.get('name', '')
-                        district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
-            except Exception:
-                pass
-
-            cache_key = f'{round(float(lat), 2)},{round(float(lon), 2)}'
-            if cache_key not in ratings_cache:
-                try:
-                    ratings_cache[cache_key] = get_ratings_by_level(float(lat), float(lon))
-                except Exception:
-                    ratings_cache[cache_key] = {'elementary': {}, 'middle': {}, 'high': {}}
-
-            r = ratings_cache[cache_key]
-            elem_data = r.get('elementary', {})
-            mid_data = r.get('middle', {})
-            high_data = r.get('high', {})
-
-            elem = elem_data.get('rating')
-            mid = mid_data.get('rating')
-            high = high_data.get('rating')
-
-            # Get top school (highest rated across all levels)
-            for level_data in [elem_data, mid_data, high_data]:
-                if level_data.get('top_rating') and (top_rating is None or level_data['top_rating'] > top_rating):
-                    top_school = level_data.get('top_school', '')
-                    top_rating = level_data.get('top_rating')
-                school_count += level_data.get('count', 0)
-
-        results.append({
-            'address': row.get('full_street_line', row.get('street', '')),
-            'city': row.get('city', ''),
-            'state': row.get('state', ''),
-            'zip': row.get('zip_code', ''),
-            'price': int(price) if pd.notna(price) else None,
-            'beds': int(row['beds']) if pd.notna(row.get('beds')) else None,
-            'baths': int(row['full_baths']) if pd.notna(row.get('full_baths')) else None,
-            'sqft': int(sqft) if pd.notna(sqft) else None,
-            'lat': float(lat) if pd.notna(lat) else None,
-            'lon': float(lon) if pd.notna(lon) else None,
-            'url': row.get('property_url', ''),
-            'flags': '|'.join(flags) if flags else '',
-            'district': district,
-            'district_grades': district_grades,
-            'elem': elem,
-            'mid': mid,
-            'high': high,
-            'top_school': top_school,
-            'top_rating': top_rating,
-            'school_count': school_count,
-        })
+    scanned = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for chunk in _chunks(rows, max_workers):
+            if len(results) >= limit:
+                break
+            enriched = list(ex.map(
+                lambda r: _enrich_row(r, ratings_cache, cache_lock), chunk))
+            for rec in enriched:
+                scanned += 1
+                if not _passes(rec, min_elem, hide_flagged, hide_units):
+                    continue
+                results.append(rec)
+                if len(results) >= limit:
+                    break
+            if verbose:
+                print(f"  Found {len(results)}/{limit} hits (scanned {scanned}/{len(rows)})...")
 
     df = pd.DataFrame(results)
-    if radius_miles:
-        # Sort suburb listings before Worcester so head(limit) gets a true cross-section;
-        # use school rating desc as tiebreaker so best listings rise to the top
-        df = df.sort_values('elem', ascending=False, na_position='last').head(limit)
+    if not df.empty:
+        # Hits are collected in discovery order; sort only for display.
+        df = df.sort_values('elem', ascending=False, na_position='last')
+    df.attrs.update(scanned=scanned, pool=len(rows), limit=limit, matched=len(df))
     return df
 
 
@@ -463,7 +512,11 @@ def create_map(df: pd.DataFrame, title: str = "Rental Search") -> folium.Map:
 def print_summary(df: pd.DataFrame):
     """Print a text summary of results."""
     print(f"\n{'='*70}")
-    print(f"RESULTS: {len(df)} listings")
+    scanned, pool = df.attrs.get('scanned'), df.attrs.get('pool')
+    if scanned is not None:
+        print(f"RESULTS: {len(df)} hits (scanned {scanned} of {pool} listings)")
+    else:
+        print(f"RESULTS: {len(df)} listings")
     print(f"{'='*70}\n")
 
     with_price = df[df['price'].notna()]
@@ -496,13 +549,18 @@ Examples:
     python search.py "Providence, RI" --output providence_rentals
     python search.py "Austin, TX" --limit 100 --min-beds 3
     python search.py "Seattle, WA" --max-price 3500 --tsv
+    python search.py "Northborough, MA" --min-elem 7 --hide-units --limit 20
         """
     )
     parser.add_argument("location", help="City/area to search (e.g., 'Providence, RI')")
     parser.add_argument("--output", "-o", help="Output filename base (without extension)")
-    parser.add_argument("--limit", "-n", type=int, default=50, help="Max listings (default: 50)")
+    parser.add_argument("--limit", "-n", type=int, default=50,
+                        help="Target number of listings that pass the filters (default: 50)")
     parser.add_argument("--min-beds", type=int, help="Minimum bedrooms")
     parser.add_argument("--max-price", type=int, help="Maximum monthly rent")
+    parser.add_argument("--min-elem", type=float, help="Minimum elementary school rating; listings below (or without a rating) are skipped")
+    parser.add_argument("--hide-flagged", action="store_true", help="Skip listings with any warning flags")
+    parser.add_argument("--hide-units", action="store_true", help="Skip UNIT (apartment) listings")
     parser.add_argument("--radius", type=float, help="Filter to listings within this many miles of the location center")
     parser.add_argument("--tsv", action="store_true", help="Output TSV instead of CSV")
     parser.add_argument("--no-map", action="store_true", help="Skip map generation")
@@ -515,12 +573,20 @@ Examples:
         limit=args.limit,
         min_beds=args.min_beds,
         max_price=args.max_price,
+        min_elem=args.min_elem,
+        hide_flagged=args.hide_flagged,
+        hide_units=args.hide_units,
         radius_miles=args.radius,
         verbose=not args.quiet
     )
 
     if df.empty:
-        return 1
+        print(f"\n0 listings matched your filters (scanned {df.attrs.get('scanned', 0)}).")
+        return 0
+
+    target = df.attrs.get('limit', args.limit)
+    if len(df) < target:
+        print(f"\nFound {len(df)} of {target} requested — pool exhausted after scanning {df.attrs.get('scanned', '?')} listings.")
 
     if args.output:
         base = args.output

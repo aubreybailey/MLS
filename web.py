@@ -55,11 +55,17 @@ def search_cities(term: str) -> list[str]:
 
 
 @st.cache_data(ttl=3600)
-def fetch_listings(location: str, limit: int = 100, radius_miles: float = None) -> pd.DataFrame:
-    """Fetch and annotate listings via search_and_enrich."""
+def fetch_listings(location: str, limit: int, radius_miles: float,
+                   min_beds: int, max_price: int, min_elem: float,
+                   hide_flagged: bool, hide_units: bool) -> pd.DataFrame:
+    """Fetch and annotate listings via search_and_enrich. All filter params are
+    part of the cache key because they change which listings are returned."""
     progress = st.progress(0, text=f"Fetching listings from {location}...")
     try:
         df = search_and_enrich(location=location, limit=limit,
+                               min_beds=min_beds, max_price=max_price,
+                               min_elem=min_elem, hide_flagged=hide_flagged,
+                               hide_units=hide_units,
                                radius_miles=radius_miles, verbose=False)
     except Exception as e:
         st.error(f"Error fetching listings: {e}")
@@ -161,7 +167,18 @@ else:
                                      help="City, ST format (e.g., 'Austin, TX')")
 radius = st.sidebar.slider("Search radius (miles)", 0, 25, 0, step=5,
                             help="0 = city only. >0 searches surrounding zip codes too.")
-limit = st.sidebar.slider("Max listings", 20, 200, 50, step=10)
+limit = st.sidebar.slider("Target hits", 20, 200, 50, step=10,
+                          help="Number of listings that pass the filters below. The search keeps scanning until it finds this many or runs out of listings.")
+
+# Filters are set BEFORE searching — they drive the scan, which keeps going
+# until it collects `limit` listings that pass (or exhausts the pool).
+st.sidebar.subheader("Filters")
+max_price = st.sidebar.number_input("Max price ($/month, 0 = no cap)",
+                                    min_value=0, value=0, step=100)
+min_beds = st.sidebar.selectbox("Min Bedrooms", [0, 1, 2, 3, 4, 5], index=0)
+min_elem = st.sidebar.slider("Min Elementary Rating", 0.0, 10.0, 0.0, step=0.5)
+hide_flagged = st.sidebar.checkbox("Hide flagged listings", value=False)
+hide_units = st.sidebar.checkbox("Hide UNIT (apartments)", value=False)
 
 radius_miles = radius if radius > 0 else None
 
@@ -180,15 +197,29 @@ if 'last_location' not in st.session_state:
 
 # Run search
 if search_clicked and location:
-    st.session_state.df = fetch_listings(location, limit, radius_miles)
+    st.session_state.df = fetch_listings(
+        location, limit, radius_miles,
+        min_beds if min_beds > 0 else None,
+        max_price if max_price > 0 else None,
+        min_elem if min_elem > 0 else None,
+        hide_flagged, hide_units,
+    )
     st.session_state.last_location = location
 
 df = st.session_state.df
 
 if df.empty:
     st.title("🏠 School-Aware Rental Search")
+    if st.session_state.last_location:
+        scanned = df.attrs.get('scanned', 0)
+        pool = df.attrs.get('pool', 0)
+        if pool:
+            st.warning(f"No listings matched your filters — scanned {scanned} of {pool} listings, all discarded. Try loosening the filters.")
+        else:
+            st.warning(f"No listings found for {st.session_state.last_location}.")
     st.markdown("""
-    Enter a location in the sidebar and click **Search** to find rentals with school ratings.
+    Set your filters in the sidebar and click **Search** to find rentals with school ratings.
+    The search keeps scanning until it finds your target number of matching listings.
 
     **Features:**
     - 📍 Interactive map with color-coded markers by school rating
@@ -204,62 +235,32 @@ if df.empty:
     """)
     st.stop()
 
-# Filters
+# City filter — cities are only known after results return, so this stays a
+# post-search display narrowing.
 st.sidebar.markdown("---")
-st.sidebar.subheader("Filters")
-
-# Price filter
-prices = df['price'].dropna()
-if not prices.empty:
-    price_min, price_max = int(prices.min()), int(prices.max())
-    price_range = st.sidebar.slider(
-        "Price Range ($)",
-        min_value=price_min,
-        max_value=price_max,
-        value=(price_min, min(5000, price_max)),
-        step=100
-    )
-else:
-    price_range = (0, 10000)
-
-# Beds filter
-beds_min = st.sidebar.selectbox("Min Bedrooms", [0, 1, 2, 3, 4, 5], index=0)
-
-# School rating filter
-elem_min = st.sidebar.slider("Min Elementary Rating", 0.0, 10.0, 0.0, step=0.5)
-
-# Flags filter
-hide_flagged = st.sidebar.checkbox("Hide flagged listings", value=False)
-hide_units = st.sidebar.checkbox("Hide UNIT (apartments)", value=False)
-
-# City filter
 cities = sorted(df['city'].dropna().unique())
 if cities:
     selected_cities = st.sidebar.multiselect("Cities", cities, default=cities)
 else:
     selected_cities = []
 
-# Apply filters
 filtered = df.copy()
-filtered = filtered[
-    (filtered['price'].fillna(0) >= price_range[0]) &
-    (filtered['price'].fillna(999999) <= price_range[1])
-]
-filtered = filtered[filtered['beds'].fillna(0) >= beds_min]
-filtered = filtered[filtered['elem'].fillna(0) >= elem_min]
 if selected_cities:
     filtered = filtered[filtered['city'].isin(selected_cities)]
-if hide_flagged:
-    filtered = filtered[filtered['flags'] == '']
-if hide_units:
-    filtered = filtered[~filtered['flags'].str.contains('UNIT', na=False)]
 
 # Main content
 st.title(f"🏠 Rentals: {st.session_state.last_location}")
 
+scanned = df.attrs.get('scanned', 0)
+pool = df.attrs.get('pool', 0)
+matched = df.attrs.get('matched', len(df))
+target = df.attrs.get('limit', limit)
+if matched < target:
+    st.info(f"Found {matched} of {target} requested (scanned {scanned} of {pool} listings); the pool was exhausted.")
+
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Found", len(df))
-col2.metric("After Filters", len(filtered))
+col1.metric("Hits", matched)
+col2.metric("Scanned", scanned)
 col3.metric("Clean (no flags)", len(filtered[filtered['flags'] == '']))
 col4.metric("Avg Elem Rating", f"{filtered['elem'].mean():.1f}" if filtered['elem'].notna().any() else "N/A")
 
