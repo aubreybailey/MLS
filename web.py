@@ -298,7 +298,7 @@ if len(filtered) > 0:
             "high": st.column_config.NumberColumn("High", format="%.1f"),
         },
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
     )
 
     # Download button
