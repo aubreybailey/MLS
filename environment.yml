@@ -9,7 +9,7 @@ channels:
 dependencies:
   # Core
   - python=3.11
-  - pandas=2.3.3
+  - pandas=2.3.3   # held <3.0.0: homeharvest 0.8.18 requires pandas<3.0.0
   - geopandas=1.1.4
   - shapely=2.1.2
   - requests=2.34.2
