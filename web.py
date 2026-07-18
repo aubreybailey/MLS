@@ -60,13 +60,23 @@ def fetch_listings(location: str, limit: int, radius_miles: float,
                    hide_flagged: bool, hide_units: bool) -> pd.DataFrame:
     """Fetch and annotate listings via search_and_enrich. All filter params are
     part of the cache key because they change which listings are returned."""
-    progress = st.progress(0, text=f"Fetching listings from {location}...")
+    progress = st.progress(0, text=f"Searching {location}…")
+
+    def _on_progress(hits, target, scanned):
+        frac = min(1.0, hits / target) if target else 0.0
+        filtered = max(0, scanned - hits)
+        progress.progress(
+            frac,
+            text=f"Found {hits}/{target} hits · scanned {scanned} · {filtered} filtered out",
+        )
+
     try:
         df = search_and_enrich(location=location, limit=limit,
                                min_beds=min_beds, max_price=max_price,
                                min_elem=min_elem, hide_flagged=hide_flagged,
                                hide_units=hide_units,
-                               radius_miles=radius_miles, verbose=False)
+                               radius_miles=radius_miles,
+                               progress_cb=_on_progress, verbose=False)
     except Exception as e:
         st.error(f"Error fetching listings: {e}")
         return pd.DataFrame()
@@ -263,7 +273,8 @@ if matched < target:
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Hits", matched)
 col2.metric("Scanned", scanned)
-col3.metric("Clean (no flags)", len(filtered[filtered['flags'] == '']))
+col3.metric("Filtered out", max(0, scanned - matched),
+            help="Listings scanned but kept out of the target hits by your filters.")
 col4.metric("Avg Elem Rating", f"{filtered['elem'].mean():.1f}" if filtered['elem'].notna().any() else "N/A")
 
 # Map

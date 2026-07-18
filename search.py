@@ -284,7 +284,7 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
                       max_price: int = None, min_elem: float = None,
                       hide_flagged: bool = False, hide_units: bool = False,
                       radius_miles: float = None, max_workers: int = 8,
-                      verbose: bool = True) -> pd.DataFrame:
+                      progress_cb=None, verbose: bool = True) -> pd.DataFrame:
     """Search rentals and enrich with school ratings and warning flags.
 
     `limit` is a quota of listings that PASS the filters. Listings are enriched
@@ -370,6 +370,13 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
                     hits.append(rec)
                     if len(hits) >= limit:
                         break
+                if progress_cb:
+                    # (hits so far, target, scanned so far). Guarded so a UI
+                    # callback hiccup can't take down the search.
+                    try:
+                        progress_cb(len(hits), limit, scanned)
+                    except Exception:
+                        pass
             if verbose:
                 where = location if dist is None else f"{loc} ({dist:.0f}mi)"
                 print(f"  after {where}: {len(hits)}/{limit} hits (scanned {scanned})")
