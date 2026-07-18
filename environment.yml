@@ -1,3 +1,7 @@
+# Pinned baseline — exact versions verified working together (Docker + local).
+# Dev cycle: keep these pinned for reproducible builds; to advance, bump the
+# versions in a dedicated commit, rebuild, test, and re-pin (or revert).
+# Last pinned: 2026-07-18
 name: rental-search
 channels:
   - conda-forge
@@ -5,20 +9,20 @@ channels:
 dependencies:
   # Core
   - python=3.11
-  - pandas>=2.0
-  - geopandas>=0.14
-  - shapely>=2.0
-  - requests>=2.28
+  - pandas=2.3.3
+  - geopandas=1.1.4
+  - shapely=2.1.2
+  - requests=2.34.2
 
   # Mapping
-  - folium>=0.15
+  - folium=0.20.0
 
   # Web UI
-  - streamlit>=1.29
+  - streamlit=1.59.2
 
   # Pip-only packages
   - pip
   - pip:
-    - homeharvest>=0.3.0
-    - streamlit-folium>=0.15.0
-    - streamlit-searchbox>=0.1.0
+    - homeharvest==0.8.18
+    - streamlit-folium==0.27.2
+    - streamlit-searchbox==0.1.24
