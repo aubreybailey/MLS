@@ -20,6 +20,16 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
 GPKG_PATH = os.path.join(DATA_DIR, 'school_districts.gpkg')
 DISTRICT_LEVELS = [("unsd", "unified"), ("elsd", "elementary"), ("scsd", "secondary")]
 
+# NCES SABS attendance zones (scripts/build_attendance_zones.py). Optional:
+# coverage is ~60% of MA districts, so absence is normal and must be reported
+# as unknown, never approximated. See ZONES_UNAVAILABLE_NOTE.
+ZONES_PATH = os.path.join(DATA_DIR, 'attendance_zones.gpkg')
+
+# Why we refuse to fall back to nearest-school: measured against real SABS
+# zones across 3048 sampled points in MA multi-school districts, picking the
+# nearest school gives the wrong school 43.6% of the time.
+NEAREST_SCHOOL_ERROR_RATE = 0.436
+
 # State abbreviation to FIPS code mapping
 STATE_FIPS = {
     "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06", "CO": "08",
@@ -75,6 +85,59 @@ def find_school_district(lat: float, lon: float, state_fips: str) -> dict | None
             }
 
     return results if results else None
+
+
+@lru_cache(maxsize=1)
+def _zone_layers() -> tuple:
+    """State layers present in the attendance-zone GeoPackage, if built."""
+    if not os.path.exists(ZONES_PATH):
+        return ()
+    try:
+        import pyogrio
+        return tuple(l[0] for l in pyogrio.list_layers(ZONES_PATH))
+    except Exception:
+        return ()
+
+
+def lookup_attendance_zone(lat: float, lon: float, state: str | None = None) -> dict:
+    """Which school's attendance zone contains this point?
+
+    Returns {'status': 'assigned'|'unzoned'|'unavailable', ...}. We never guess:
+    'unzoned' means this district did not participate in SABS, and the caller
+    should surface that as "confirm this yourself" rather than substituting a
+    nearest-school or area-average figure.
+    """
+    layers = _zone_layers()
+    if not layers:
+        return {'status': 'unavailable', 'reason': 'attendance zone data not built'}
+
+    search = [state.upper()] if state and state.upper() in layers else list(layers)
+    point = Point(lon, lat)
+    for layer in search:
+        try:
+            cands = gpd.read_file(ZONES_PATH, layer=layer, bbox=(lon, lat, lon, lat))
+        except Exception:
+            continue
+        if cands.empty:
+            continue
+        hits = cands[cands.geometry.contains(point)]
+        if hits.empty:
+            continue
+        # A point can sit in several zones (elementary + middle + high). Return
+        # them keyed by level so callers can pick the one they care about.
+        out = {}
+        for _, r in hits.iterrows():
+            out[str(r.get('level') or '?')] = {
+                'school': r.get('schnam', ''),
+                'ncessch': r.get('ncessch', ''),
+                'leaid': r.get('leaid', ''),
+                'grades': f"{r.get('gslo', '?')}-{r.get('gshi', '?')}",
+                'open_enroll': r.get('openEnroll'),
+            }
+        return {'status': 'assigned', 'zones': out}
+
+    return {'status': 'unzoned',
+            'reason': 'district did not participate in the SABS collection'}
 
 
 def _lookup_gpkg(lat: float, lon: float) -> dict | None:

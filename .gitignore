@@ -16,3 +16,6 @@ data/school_districts.gpkg
 
 # Census TIGER boundary data - regenerate with ./download_data.sh
 data/
+
+# NCES SABS attendance zones - rebuild with scripts/build_attendance_zones.py
+data/attendance_zones.gpkg

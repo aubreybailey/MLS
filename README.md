@@ -123,6 +123,40 @@ A warm search runs ~6x faster than a cold one (40s -> 7s for 8 hits at 15mi).
 Failed lookups are never cached. Inspect with `python db.py`; reset by deleting
 `cache/schools.db`. Override the location with `SCHOOLS_DB`.
 
+## Attendance Zones (which elementary school an address actually feeds into)
+
+School **district** boundaries (TIGER) are not the same as school **attendance
+zones**. 74% of Massachusetts districts have more than one school (5.5 on
+average), so knowing the district doesn't tell you the assigned school.
+
+**Nearest school is not a usable substitute.** Measured against real attendance
+zones across 3,048 sampled points in MA multi-school districts, picking the
+nearest school gives the **wrong school 43.6% of the time** — zones follow bus
+routes, rivers, highways and enrollment balancing, not distance.
+
+So the app uses real zones where they exist and says so plainly where they
+don't. Build the layer with:
+
+```bash
+python scripts/build_attendance_zones.py --state MA   # downloads ~557MB
+docker compose run --rm geopackage                     # (districts, separate)
+```
+
+| Column | Meaning |
+|---|---|
+| `elem_school` | The zoned elementary school. Blank = unknown. |
+| `elem` | That school's own rating when zoned; otherwise a ~3mi area average. |
+| `elem_source` | `zoned`, `zoned-unrated`, or `area-avg`. |
+| `elem_confirm` | `*confirm elementary` whenever `elem` is **not** the assigned school. |
+
+**Source limitations — read these.** Zones come from the NCES School Attendance
+Boundary Survey (SABS), which was experimental and **discontinued after 2015-16**,
+so boundaries are ~10 years old and districts that have since redrawn them will
+be wrong (we can't detect which). Participation was voluntary: in MA only
+**192 of 322** districts responded (~60%). Boston, Lowell, Lawrence, Quincy,
+Shrewsbury and Northborough have **no zones at all** and will always show
+`*confirm elementary`.
+
 ## Warning Flags
 
 Listings are automatically flagged:

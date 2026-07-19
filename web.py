@@ -123,6 +123,8 @@ def create_map(df: pd.DataFrame) -> folium.Map:
         <b>{row["address"]}, {row["city"]}</b><br>
         <b>${row["price"]:,}</b> | {row["beds"]}bd/{row["baths"]}ba | {row["sqft"] or "?"} sqft<br>
         <b>Schools:</b> Elem {row["elem"]}, Mid {row["mid"]}, High {row["high"]}<br>
+        {f'Assigned elem: <b>{row["elem_school"]}</b><br>' if row.get("elem_school") else ''}
+        {f'<span style="color:#b26a00;">{row["elem_confirm"]} (area average, not the assigned school)</span><br>' if row.get("elem_confirm") else ''}
         District: {row["district"]}{f' ({row["district_grades"]})' if row.get("district_grades") else ''}<br>
         {f'HS District: {row["district_hs"]} ({row["district_hs_grades"]})<br>' if row.get("district_hs") else ''}
         {f'<b style="color:red;">Flags: {row["flags"]}</b><br>' if row["flags"] else ''}
@@ -333,7 +335,8 @@ st.markdown("""
 st.subheader(f"Listings ({len(filtered)})")
 if len(filtered) > 0:
     cols = ['address', 'city', 'price', 'beds', 'baths', 'sqft',
-            'elem', 'mid', 'high', 'district', 'district_hs', 'flags', 'url']
+            'elem', 'elem_school', 'elem_confirm', 'mid', 'high',
+            'district', 'district_hs', 'flags', 'url']
     # Tolerate frames cached before district_hs existed.
     display_df = filtered[[c for c in cols if c in filtered.columns]].copy()
     display_df = display_df.sort_values('elem', ascending=False, na_position='last')
@@ -348,6 +351,15 @@ if len(filtered) > 0:
             "high": st.column_config.NumberColumn("High", format="%.1f"),
             "district": st.column_config.TextColumn("District"),
             "district_hs": st.column_config.TextColumn("HS District"),
+            "elem_school": st.column_config.TextColumn(
+                "Assigned Elem",
+                help="The elementary school this address is zoned for (NCES SABS "
+                     "2015-16). Blank means this district didn't participate."),
+            "elem_confirm": st.column_config.TextColumn(
+                "Verify?",
+                help="'*confirm elementary' means the Elem rating is a ~3mi area "
+                     "average, NOT the assigned school. Nearest-school guessing is "
+                     "wrong 44% of the time, so verify before relying on it."),
         },
         hide_index=True,
         width='stretch',

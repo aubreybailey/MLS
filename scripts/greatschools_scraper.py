@@ -171,7 +171,11 @@ def get_ratings_by_level(lat: float, lon: float, radius: int = 3) -> dict:
                 'count': len(rated),
                 'top_school': top.name,
                 'top_rating': top.rating,
-                'schools': [{'name': s.name, 'rating': s.rating, 'grades': s.grades} for s in rated[:5]]
+                # Keep every rated school, not just the first few: the address's
+                # assigned school (from SABS attendance zones) is often well
+                # down this list, and truncating meant we could never attach a
+                # rating to it. Dense areas return ~20 per level, which is small.
+                'schools': [{'name': s.name, 'rating': s.rating, 'grades': s.grades} for s in rated]
             }
         else:
             result[level] = {

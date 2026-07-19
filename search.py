@@ -28,7 +28,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from homeharvest import scrape_property
-from school_district_lookup import lookup_coords
+from school_district_lookup import lookup_coords, lookup_attendance_zone
 from greatschools_scraper import get_ratings_by_level
 import db
 
@@ -179,6 +179,40 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
     return towns
 
 
+_SCHOOL_NOISE = ('elementary', 'school', 'middle', 'high', 'academy', 'the',
+                 'jr', 'sr', 'junior', 'senior')
+
+
+def _norm_school(name: str) -> set:
+    """Tokenize a school name for matching NCES names against GreatSchools ones
+    (e.g. 'Marion E Zeh' vs 'Marion E. Zeh Elementary School')."""
+    cleaned = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in str(name).lower())
+    return {t for t in cleaned.split() if t and t not in _SCHOOL_NOISE}
+
+
+def _rating_for_school(name: str, ratings: dict):
+    """Find the GreatSchools rating for one specific school, across all levels.
+
+    Returns None when we can't confidently identify it -- the caller then falls
+    back to the area average and marks the result as unconfirmed rather than
+    attaching a number to the wrong school."""
+    want = _norm_school(name)
+    if not want:
+        return None
+    best, best_overlap = None, 0
+    for level in ('elementary', 'middle', 'high', 'other'):
+        for s in (ratings.get(level) or {}).get('schools', []) or []:
+            got = _norm_school(s.get('name', ''))
+            if not got:
+                continue
+            overlap = len(want & got)
+            # Require the shorter name to be essentially contained in the other,
+            # so 'Lincoln Street' doesn't match 'Lincoln High'.
+            if overlap >= min(len(want), len(got)) and overlap > best_overlap:
+                best, best_overlap = s.get('rating'), overlap
+    return best
+
+
 def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
     """Enrich one raw listing row with warning flags and school data.
 
@@ -208,6 +242,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
     # Get school data
     district, district_grades = '', ''
     district_hs, district_hs_grades = '', ''
+    elem_school, elem_source = '', 'area-avg'
     elem, mid, high = None, None, None
     top_school, top_rating = '', None
     school_count = 0
@@ -247,7 +282,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         with cache_lock:
             r = ratings_cache.get(cache_key)
         if r is None:
-            r = db.get('ratings', cache_key)
+            r = db.get('ratings_v2', cache_key)
         if r is None:
             # Fetch outside the lock; concurrent duplicate fetches of the same
             # ~1km cell are wasteful but harmless.
@@ -255,7 +290,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
                 r = get_ratings_by_level(cell_lat, cell_lon)
                 # Only persist real results — caching a failed scrape would
                 # blank out this cell for the whole TTL.
-                db.put('ratings', cache_key, r)
+                db.put('ratings_v2', cache_key, r)
             except Exception:
                 r = {'elementary': {}, 'middle': {}, 'high': {}}
         with cache_lock:
@@ -268,6 +303,27 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         elem = elem_data.get('rating')
         mid = mid_data.get('rating')
         high = high_data.get('rating')
+
+        # Attendance zone: which elementary does this address ACTUALLY feed
+        # into? Only SABS can answer that; nearest-school is wrong 43.6% of the
+        # time, so when there's no zone we keep the area average but mark it
+        # unconfirmed instead of implying we know the school.
+        try:
+            z = lookup_attendance_zone(float(lat), float(lon), row.get('state'))
+            if z.get('status') == 'assigned':
+                # SABS 'level' 1 = primary/elementary.
+                zone = z['zones'].get('1') or z['zones'].get('primary')
+                if zone:
+                    elem_school = zone.get('school', '')
+                    assigned = _rating_for_school(elem_school, r)
+                    if assigned is not None:
+                        elem = assigned          # this school, not an average
+                        elem_source = 'zoned'
+                    else:
+                        # We know the school but GreatSchools didn't return it.
+                        elem_source = 'zoned-unrated'
+        except Exception:
+            pass
 
         # Get top school (highest rated across all levels)
         for level_data in [elem_data, mid_data, high_data]:
@@ -294,6 +350,11 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         'district_hs': district_hs,
         'district_hs_grades': district_hs_grades,
         'elem': elem,
+        'elem_school': elem_school,
+        'elem_source': elem_source,
+        # Shown to the user verbatim: 'zoned' means we know the assigned school,
+        # anything else means go check before trusting the rating.
+        'elem_confirm': '' if elem_source == 'zoned' else '*confirm elementary',
         'mid': mid,
         'high': high,
         'top_school': top_school,

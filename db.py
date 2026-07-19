@@ -30,6 +30,9 @@ DB_PATH = os.environ.get(
 # Per-namespace freshness. School ratings are published annually; town geography
 # and ZIP assignments effectively never change.
 TTL_DAYS = {
+    # v2 stores every rated school per cell, not just the first five -- needed
+    # to attach a rating to an address's SABS-assigned school.
+    'ratings_v2': 90,
     'ratings': 90,
     'towns': 365,
     'town_zip': 365,
