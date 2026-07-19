@@ -23,6 +23,7 @@ mkdir -p "$DATA_DIR"
 downloaded=0
 skipped=0
 failed=0
+errors=0
 
 for dtype in $TYPES; do
     echo "--- $dtype boundaries ---"
@@ -39,7 +40,16 @@ for dtype in $TYPES; do
         fi
 
         printf "  %-40s" "$file"
-        curl -sL -o "$dest" "$url" 2>/dev/null
+
+        # census.gov rate-limits bulk sequential downloads with HTTP 429. Without
+        # retries that reads as "this state has no such district type", silently
+        # producing incomplete data -- it cost us every Northeast SCSD once.
+        # curl --retry backs off on 429/5xx; --retry-all-errors covers transport
+        # failures too. The inter-request sleep keeps us under the limit to begin with.
+        http_code=$(curl -sL --retry 5 --retry-delay 2 --retry-max-time 180 \
+                         --retry-all-errors --max-time 120 \
+                         -o "$dest" -w '%{http_code}' "$url" 2>/dev/null || echo 000)
+        sleep 0.2
 
         # Verify it's really a zip. A size check isn't enough: the Census serves
         # an 18KB HTML 404 page for state/type combinations that don't exist
@@ -57,10 +67,16 @@ for dtype in $TYPES; do
                 failed=$((failed + 1))
                 echo "[EXTRACT FAILED]"
             fi
-        else
+        elif [ "$http_code" = "404" ]; then
+            # Genuinely absent: most states have no elementary-only or
+            # secondary-only districts.
             rm -f "$dest"
             failed=$((failed + 1))
             echo "[N/A]"
+        else
+            rm -f "$dest"
+            errors=$((errors + 1))
+            echo "[ERROR HTTP $http_code]"
         fi
     done
 done
@@ -72,7 +88,10 @@ echo ""
 echo "=== Summary ==="
 echo "  Downloaded: $downloaded new files"
 echo "  Skipped:    $skipped (already exist)"
-echo "  Unavailable: $failed (not all states have all district types)"
+echo "  Unavailable: $failed (HTTP 404 - state genuinely has no such district type)"
+if [ "$errors" -gt 0 ]; then
+    echo "  ERRORS:     $errors (transient failures - RE-RUN to retry these)"
+fi
 
 # Count total
 shp_count=$(ls -1 "$DATA_DIR"/tl_2023_*_*.shp 2>/dev/null | wc -l | tr -d ' ')

@@ -13,3 +13,6 @@ output/
 
 # Derived from the tl_2023_* shapefiles via scripts/build_geopackage.py
 data/school_districts.gpkg
+
+# Census TIGER boundary data - regenerate with ./download_data.sh
+data/
