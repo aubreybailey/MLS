@@ -50,7 +50,42 @@ CREATE TABLE IF NOT EXISTS lookups (
     payload    TEXT NOT NULL,
     PRIMARY KEY (namespace, key)
 );
+
+-- School directory, keyed by the NCES school id. ncessch is what SABS
+-- attendance zones carry, so a zone lookup lands directly on a row here.
+CREATE TABLE IF NOT EXISTS schools (
+    ncessch    TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    leaid      TEXT,              -- district; equals the TIGER district GEOID
+    state      TEXT,
+    city       TEXT,
+    lat        REAL,
+    lon        REAL,
+    grade_lo   INTEGER,
+    grade_hi   INTEGER,
+    level      TEXT,              -- elementary | middle | high | other
+    enrollment INTEGER,
+    source     TEXT DEFAULT 'nces',
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS schools_leaid ON schools(leaid);
+CREATE INDEX IF NOT EXISTS schools_geo   ON schools(lat, lon);
+CREATE INDEX IF NOT EXISTS schools_state ON schools(state);
+
+-- Ratings per school. Split from the directory because they refresh on a
+-- different cadence and can come from different sources (scrape vs hand-entered).
+CREATE TABLE IF NOT EXISTS school_ratings (
+    ncessch    TEXT PRIMARY KEY,
+    rating     REAL,
+    matched_name TEXT,            -- the name the source used, for auditing matches
+    source     TEXT DEFAULT 'greatschools',
+    fetched_at TEXT,
+    FOREIGN KEY (ncessch) REFERENCES schools(ncessch)
+);
 """
+
+# Ratings are published annually.
+RATING_TTL_DAYS = 90
 
 
 def _connect():
@@ -106,6 +141,111 @@ def put(namespace: str, key: str, value) -> None:
             conn.commit()
     except Exception:
         pass
+
+
+def upsert_schools(rows: list) -> int:
+    """Insert/refresh school directory rows. Each dict needs at least ncessch
+    and name. Returns the number written."""
+    if not rows:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    cols = ('ncessch', 'name', 'leaid', 'state', 'city', 'lat', 'lon',
+            'grade_lo', 'grade_hi', 'level', 'enrollment', 'source')
+    try:
+        with _lock:
+            conn = _connect()
+            conn.executemany(
+                f"INSERT INTO schools ({','.join(cols)}, updated_at) "
+                f"VALUES ({','.join('?' * len(cols))}, ?) "
+                f"ON CONFLICT(ncessch) DO UPDATE SET "
+                + ', '.join(f'{c}=excluded.{c}' for c in cols[1:])
+                + ", updated_at=excluded.updated_at",
+                [tuple(r.get(c) for c in cols) + (now,) for r in rows],
+            )
+            conn.commit()
+        return len(rows)
+    except Exception:
+        return 0
+
+
+def put_school_rating(ncessch: str, rating, matched_name: str = '',
+                      source: str = 'greatschools') -> None:
+    """Record a rating for one school. Never raises."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                'INSERT INTO school_ratings (ncessch, rating, matched_name, source, fetched_at) '
+                'VALUES (?, ?, ?, ?, ?) ON CONFLICT(ncessch) DO UPDATE SET '
+                'rating=excluded.rating, matched_name=excluded.matched_name, '
+                'source=excluded.source, fetched_at=excluded.fetched_at',
+                (ncessch, rating, matched_name, source, now),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def get_school_rating(ncessch: str, max_age_days: int = RATING_TTL_DAYS):
+    """Rating for one school, or None if absent/stale. Hand-entered rows
+    (source='manual') never expire -- you entered them deliberately."""
+    try:
+        with _lock:
+            cur = _connect().execute(
+                'SELECT rating, fetched_at, source FROM school_ratings WHERE ncessch = ?',
+                (ncessch,),
+            )
+            row = cur.fetchone()
+        if row is None or row[0] is None:
+            return None
+        if row[2] != 'manual' and row[1]:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(row[1]) > timedelta(days=max_age_days):
+                return None
+        return row[0]
+    except Exception:
+        return None
+
+
+def schools_near(lat: float, lon: float, radius_miles: float = 5.0,
+                 level: str = None, limit: int = 100) -> list:
+    """Schools near a point, nearest first. Uses a bounding box in SQL (indexed)
+    then exact haversine in Python -- fine at this table size."""
+    import math
+    try:
+        dlat = radius_miles / 69.0
+        dlon = radius_miles / max(0.1, 69.0 * math.cos(math.radians(lat)))
+        sql = ('SELECT ncessch, name, leaid, state, city, lat, lon, grade_lo, '
+               'grade_hi, level, enrollment FROM schools '
+               'WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?')
+        args = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+        if level:
+            sql += ' AND level = ?'
+            args.append(level)
+        with _lock:
+            rows = _connect().execute(sql, args).fetchall()
+
+        def hav(la, lo):
+            R = 3958.8
+            x = (math.sin(math.radians(la - lat) / 2) ** 2
+                 + math.cos(math.radians(lat)) * math.cos(math.radians(la))
+                 * math.sin(math.radians(lo - lon) / 2) ** 2)
+            return R * 2 * math.asin(math.sqrt(x))
+
+        keys = ('ncessch', 'name', 'leaid', 'state', 'city', 'lat', 'lon',
+                'grade_lo', 'grade_hi', 'level', 'enrollment')
+        out = []
+        for r in rows:
+            d = dict(zip(keys, r))
+            if d['lat'] is None or d['lon'] is None:
+                continue
+            d['distance_mi'] = hav(d['lat'], d['lon'])
+            if d['distance_mi'] <= radius_miles:
+                out.append(d)
+        out.sort(key=lambda d: d['distance_mi'])
+        return out[:limit]
+    except Exception:
+        return []
 
 
 def stats() -> dict:

@@ -149,6 +149,36 @@ docker compose run --rm geopackage                     # (districts, separate)
 | `elem_source` | `zoned`, `zoned-unrated`, or `area-avg`. |
 | `elem_confirm` | `*confirm elementary` whenever `elem` is **not** the assigned school. |
 
+### Schools table
+
+`cache/schools.db` holds an NCES-keyed school directory plus per-school ratings,
+so a zone lookup (which yields an `ncessch`) lands on an exact rating instead of
+a map-tile average.
+
+```bash
+python scripts/build_schools_table.py --state MA        # 1,862 MA schools
+python scripts/backfill_school_ratings.py --location "Northborough, MA" \
+       --radius 8 --limit 100 --level elementary
+```
+
+The backfill walks outward from a point, queries GreatSchools once per ~1km
+cell, and matches each result back to an NCES school id. Matching is
+deliberately conservative (`scripts/school_match.py`): ambiguous names are
+skipped, because attaching the wrong school's rating is worse than none.
+Hand-entered ratings (`source='manual'`) never expire.
+
+Why per-school matters — Northborough's four elementaries:
+
+| School | Rating |
+|---|---|
+| Fannie E Proctor | 9.0 |
+| Marguerite E Peaslee | 8.0 |
+| Lincoln Street | 7.0 |
+| Marion E Zeh | 7.0 |
+
+A 2-point spread inside one district, which a district-level or area-average
+number cannot express.
+
 **Source limitations — read these.** Zones come from the NCES School Attendance
 Boundary Survey (SABS), which was experimental and **discontinued after 2015-16**,
 so boundaries are ~10 years old and districts that have since redrawn them will

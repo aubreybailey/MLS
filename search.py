@@ -29,6 +29,7 @@ warnings.filterwarnings('ignore')
 
 from homeharvest import scrape_property
 from school_district_lookup import lookup_coords, lookup_attendance_zone
+from school_match import names_match
 from greatschools_scraper import get_ratings_by_level
 import db
 
@@ -179,38 +180,25 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
     return towns
 
 
-_SCHOOL_NOISE = ('elementary', 'school', 'middle', 'high', 'academy', 'the',
-                 'jr', 'sr', 'junior', 'senior')
+def _rating_for_school(name: str, ncessch: str, ratings: dict):
+    """Rating for one specific school.
 
-
-def _norm_school(name: str) -> set:
-    """Tokenize a school name for matching NCES names against GreatSchools ones
-    (e.g. 'Marion E Zeh' vs 'Marion E. Zeh Elementary School')."""
-    cleaned = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in str(name).lower())
-    return {t for t in cleaned.split() if t and t not in _SCHOOL_NOISE}
-
-
-def _rating_for_school(name: str, ratings: dict):
-    """Find the GreatSchools rating for one specific school, across all levels.
-
-    Returns None when we can't confidently identify it -- the caller then falls
-    back to the area average and marks the result as unconfirmed rather than
-    attaching a number to the wrong school."""
-    want = _norm_school(name)
-    if not want:
+    Prefers the schools table (exact, keyed by NCES id, populated by
+    scripts/backfill_school_ratings.py) and falls back to name-matching within
+    this cell's GreatSchools payload. Returns None when the school can't be
+    identified confidently -- the caller then keeps the area average and marks
+    it unconfirmed rather than attaching another school's number."""
+    if ncessch:
+        stored = db.get_school_rating(ncessch)
+        if stored is not None:
+            return stored
+    if not name:
         return None
-    best, best_overlap = None, 0
     for level in ('elementary', 'middle', 'high', 'other'):
         for s in (ratings.get(level) or {}).get('schools', []) or []:
-            got = _norm_school(s.get('name', ''))
-            if not got:
-                continue
-            overlap = len(want & got)
-            # Require the shorter name to be essentially contained in the other,
-            # so 'Lincoln Street' doesn't match 'Lincoln High'.
-            if overlap >= min(len(want), len(got)) and overlap > best_overlap:
-                best, best_overlap = s.get('rating'), overlap
-    return best
+            if s.get('rating') is not None and names_match(name, s.get('name', '')):
+                return s['rating']
+    return None
 
 
 def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
@@ -315,7 +303,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
                 zone = z['zones'].get('1') or z['zones'].get('primary')
                 if zone:
                     elem_school = zone.get('school', '')
-                    assigned = _rating_for_school(elem_school, r)
+                    assigned = _rating_for_school(elem_school, zone.get('ncessch', ''), r)
                     if assigned is not None:
                         elem = assigned          # this school, not an average
                         elem_source = 'zoned'
