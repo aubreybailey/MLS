@@ -50,9 +50,90 @@ def cells_for(schools: list, precision: int = 2) -> list:
     return out
 
 
+def haversine(a, b, c, d):
+    import math
+    R = 3958.8
+    x = (math.sin(math.radians(c - a) / 2) ** 2
+         + math.cos(math.radians(a)) * math.cos(math.radians(c))
+         * math.sin(math.radians(d - b) / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(x))
+
+
+def backfill_state(state: str, level: str, delay: float, max_queries: int,
+                   query_radius: float = 2.5) -> int:
+    """Cover every school in a state with as few queries as possible.
+
+    Each GreatSchools call already returns everything within ~3 miles, so
+    querying per school (or per 1km cell) wastes an order of magnitude of
+    requests. Instead: walk the unrated schools, query at one, let that call
+    rate all its neighbours, and skip anything already covered by a previous
+    query point. That turns ~1900 schools into a few hundred requests.
+    """
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    sql = ('SELECT ncessch, name, lat, lon FROM schools '
+           'WHERE state = ? AND lat IS NOT NULL')
+    args = [state]
+    if level:
+        sql += ' AND level = ?'
+        args.append(level)
+    targets = [dict(zip(('ncessch', 'name', 'lat', 'lon'), r))
+               for r in conn.execute(sql, args)]
+    conn.close()
+
+    print(f"{len(targets)} {level or 'total'} schools in {state}.")
+    queried = []          # points we've already covered
+    rated = unmatched = queries = 0
+
+    for i, s in enumerate(targets):
+        if queries >= max_queries:
+            print(f"\nHit --max-queries ({max_queries}); re-run to continue.")
+            break
+        if db.get_school_rating(s['ncessch']) is not None:
+            continue
+        # Already inside a previous query's footprint: if GreatSchools had a
+        # rating for this school, that call would have supplied it.
+        if any(haversine(s['lat'], s['lon'], q[0], q[1]) < query_radius for q in queried):
+            continue
+
+        try:
+            payload = get_ratings_by_level(s['lat'], s['lon'])
+        except Exception as e:
+            print(f"  query failed at {s['name']}: {e}")
+            continue
+        queries += 1
+        queried.append((s['lat'], s['lon']))
+
+        nearby = db.schools_near(s['lat'], s['lon'], 4.0, None, 250)
+        got = 0
+        for lvl in ('elementary', 'middle', 'high', 'other'):
+            for gs in (payload.get(lvl) or {}).get('schools', []) or []:
+                if gs.get('rating') is None:
+                    continue
+                hit = best_match(gs.get('name', ''), nearby)
+                if not hit:
+                    unmatched += 1
+                    continue
+                if db.get_school_rating(hit['ncessch']) is None:
+                    db.put_school_rating(hit['ncessch'], gs['rating'], gs.get('name', ''))
+                    rated += 1
+                    got += 1
+        print(f"  [{queries}] {s['name'][:34]:<34} +{got:<3} (total {rated}, {i}/{len(targets)} scanned)",
+              flush=True)
+        time.sleep(delay)
+
+    print(f"\nqueries: {queries}   newly rated: {rated}   unmatched names: {unmatched}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--state', help='backfill a whole state, e.g. MA')
+    ap.add_argument('--delay', type=float, default=0.6,
+                    help='seconds between GreatSchools queries (default 0.6)')
+    ap.add_argument('--max-queries', type=int, default=2000,
+                    help='stop after this many requests; re-run to resume')
     ap.add_argument('--location', help='e.g. "Northborough, MA"')
     ap.add_argument('--lat', type=float)
     ap.add_argument('--lon', type=float)
@@ -61,6 +142,10 @@ def main():
     ap.add_argument('--level', help='elementary | middle | high')
     ap.add_argument('--refresh', action='store_true', help='re-fetch schools already rated')
     args = ap.parse_args()
+
+    if args.state:
+        return backfill_state(args.state.upper(), args.level, args.delay,
+                              args.max_queries)
 
     if args.lat is not None and args.lon is not None:
         lat, lon = args.lat, args.lon
