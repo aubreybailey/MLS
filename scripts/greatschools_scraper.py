@@ -12,6 +12,13 @@ from typing import Optional
 
 REQUEST_TIMEOUT = 15
 
+# GreatSchools returns 25 results per page regardless of radius.
+PAGE_SIZE = 25
+MAX_PAGES = 8
+
+# Widening steps used when a search returns no schools at all (see below).
+RADIUS_ESCALATION = [3, 10, 25]
+
 
 @dataclass
 class SchoolRating:
@@ -30,10 +37,20 @@ def search_schools_by_location(
     lon: float,
     radius_miles: int = 5,
     grade_levels: str = 'e',
+    max_pages: int = MAX_PAGES,
 ) -> list[SchoolRating]:
     """
     Search GreatSchools by location and extract school ratings.
+
+    Results are paginated at 25 per page regardless of radius, so a single
+    request in a dense area sees only a fraction of what's there -- Boston has
+    109 schools and one query returns 25 of them. Widening the radius does not
+    help (distance=2,3,5,10 all return exactly 25); only paging does.
     """
+    return _search_paged(lat, lon, radius_miles, grade_levels, max_pages)
+
+
+def _search_page(lat, lon, radius_miles, grade_levels, page):
     url = "https://www.greatschools.org/search/search.page"
     params = {
         "lat": lat,
@@ -41,6 +58,8 @@ def search_schools_by_location(
         "distance": radius_miles,
         "gradeLevels": grade_levels,
     }
+    if page > 1:
+        params["page"] = page
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -48,6 +67,19 @@ def search_schools_by_location(
 
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+        # GreatSchools answers an empty search with HTTP 404 (the body reads
+        # "No results"), not an error. In rural areas nothing is indexed within
+        # the default radius, so widen rather than give up -- otherwise those
+        # districts never get ratings and fall through to the unreliable
+        # area-average path. Not a bot wall: no captcha is involved.
+        if (resp.status_code == 404 and page == 1
+                and radius_miles < RADIUS_ESCALATION[-1]):
+            for wider in [r for r in RADIUS_ESCALATION if r > radius_miles]:
+                params['distance'] = wider
+                resp = requests.get(url, params=params, headers=headers,
+                                    timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 200:
+                    break
         resp.raise_for_status()
         html = resp.text
 
@@ -106,6 +138,26 @@ def search_schools_by_location(
     except Exception as e:
         print(f"Error searching GreatSchools: {e}")
         return []
+
+
+def _search_paged(lat, lon, radius_miles, grade_levels, max_pages):
+    """Walk pages until one comes back short, empty, or we hit max_pages.
+
+    A short page means we've reached the end of the result set; a 404 on page
+    >1 means the same. Dedup by name across pages since the API can repeat
+    entries near page boundaries.
+    """
+    out, seen = [], set()
+    for page in range(1, max_pages + 1):
+        batch = _search_page(lat, lon, radius_miles, grade_levels, page)
+        if not batch:
+            break
+        new = [s for s in batch if s.name not in seen]
+        seen.update(s.name for s in batch)
+        out.extend(new)
+        if len(batch) < PAGE_SIZE:
+            break
+    return out
 
 
 def classify_school_level(grades: str) -> str:
