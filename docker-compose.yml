@@ -37,6 +37,22 @@ services:
     profiles:
       - cli
 
+  # One-off setup: convert the TIGER shapefiles into a single indexed
+  # GeoPackage (data/school_districts.gpkg), which is what the district lookup
+  # uses. Needs data/ writable, unlike the read-only web/cli mounts.
+  #   docker compose run --rm geopackage           # build if missing
+  #   docker compose run --rm geopackage --force   # rebuild
+  geopackage:
+    build: .
+    environment:
+      - PROJ_DATA=/opt/conda/envs/rental-search/share/proj
+    volumes:
+      - ./data:/app/data
+    working_dir: /app
+    entrypoint: ["python", "/app/scripts/build_geopackage.py"]
+    profiles:
+      - setup
+
   # Daily saved-search notifier -> ntfy. Run from cron:
   #   docker compose run --rm notify
   # host networking so it can reach an ntfy server on your LAN reliably.

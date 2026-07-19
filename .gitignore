@@ -10,3 +10,6 @@ cache/
 
 # CLI search output
 output/
+
+# Derived from the tl_2023_* shapefiles via scripts/build_geopackage.py
+data/school_districts.gpkg

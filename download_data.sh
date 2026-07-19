@@ -41,12 +41,22 @@ for dtype in $TYPES; do
         printf "  %-40s" "$file"
         curl -sL -o "$dest" "$url" 2>/dev/null
 
-        # Check if download succeeded (file > 1KB)
-        if [ -f "$dest" ] && [ $(stat -f%z "$dest" 2>/dev/null || stat -c%s "$dest" 2>/dev/null) -gt 1000 ]; then
-            unzip -q -o "$dest" -d "$DATA_DIR" 2>/dev/null
-            rm -f "$dest"
-            downloaded=$((downloaded + 1))
-            echo "[OK]"
+        # Verify it's really a zip. A size check isn't enough: the Census serves
+        # an 18KB HTML 404 page for state/type combinations that don't exist
+        # (e.g. AL has no elementary-only districts), which sails past ">1KB".
+        # unzip -t also guards against truncated downloads. Note the explicit
+        # failure handling -- under `set -e` a bare failing unzip would abort
+        # the entire run at the first missing state.
+        if [ -f "$dest" ] && unzip -tq "$dest" >/dev/null 2>&1; then
+            if unzip -q -o "$dest" -d "$DATA_DIR" 2>/dev/null; then
+                rm -f "$dest"
+                downloaded=$((downloaded + 1))
+                echo "[OK]"
+            else
+                rm -f "$dest"
+                failed=$((failed + 1))
+                echo "[EXTRACT FAILED]"
+            fi
         else
             rm -f "$dest"
             failed=$((failed + 1))
@@ -73,6 +83,19 @@ echo "Total shapefiles: $shp_count"
 if command -v du &> /dev/null; then
     size=$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1)
     echo "Data directory size: $size"
+fi
+
+# Convert to a single indexed GeoPackage. This is what the lookup actually uses;
+# without it, lookups fall back to scanning per-state shapefiles (much slower).
+echo ""
+echo "=== Building GeoPackage ==="
+if python -c "import geopandas" 2>/dev/null; then
+    python "$SCRIPT_DIR/scripts/build_geopackage.py" --force
+else
+    echo "geopandas not available in this shell -- skipping."
+    echo "Build it later with:"
+    echo "  conda activate rental-search && python scripts/build_geopackage.py"
+    echo "  # or: docker compose run --rm geopackage"
 fi
 
 echo ""

@@ -159,11 +159,23 @@ data/
 └── tl_2023_*_scsd.shp   # Secondary districts
 ```
 
-These cover all 50 US states (~420 MB). Mount from parent `mls/data/` or download with:
+These cover all 50 US states. `./download_data.sh` fetches them and then builds
+`data/school_districts.gpkg` — a single GeoPackage (SQLite + R-tree spatial
+index) that the lookup uses instead of scanning per-state shapefiles.
+
+Build or rebuild it on its own:
 
 ```bash
-cd .. && ./scripts/download_boundaries.sh
+python scripts/build_geopackage.py [--force]   # local conda
+docker compose run --rm geopackage [--force]   # docker
 ```
+
+Note that not every state has every district type — most have only `unsd`
+(unified). New England is the main exception: Massachusetts districts live in
+`elsd`/`scsd`, so those types are required for MA lookups to resolve.
+
+Once the GeoPackage exists the `tl_2023_*` shapefiles are only needed to rebuild
+it, and can be deleted to reclaim ~237MB.
 
 ## Project Structure
 

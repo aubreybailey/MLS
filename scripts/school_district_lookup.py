@@ -15,6 +15,11 @@ from functools import lru_cache
 # Data directory - relative to app root
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
 
+# Preferred backend: one indexed GeoPackage instead of 358 shapefiles.
+# Build it with scripts/build_geopackage.py; we fall back to shapefiles if absent.
+GPKG_PATH = os.path.join(DATA_DIR, 'school_districts.gpkg')
+DISTRICT_LEVELS = [("unsd", "unified"), ("elsd", "elementary"), ("scsd", "secondary")]
+
 # State abbreviation to FIPS code mapping
 STATE_FIPS = {
     "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06", "CO": "08",
@@ -52,7 +57,7 @@ def find_school_district(lat: float, lon: float, state_fips: str) -> dict | None
     point = Point(lon, lat)
     results = {}
 
-    for dtype, label in [("unsd", "unified"), ("elsd", "elementary"), ("scsd", "secondary")]:
+    for dtype, label in DISTRICT_LEVELS:
         gdf = load_state_districts(state_fips, dtype)
         if gdf is None:
             continue
@@ -72,16 +77,66 @@ def find_school_district(lat: float, lon: float, state_fips: str) -> dict | None
     return results if results else None
 
 
+def _lookup_gpkg(lat: float, lon: float) -> dict | None:
+    """Point-in-polygon against the national GeoPackage layers.
+
+    The bbox filter is pushed down to GDAL, which answers it from the
+    GeoPackage's R-tree index -- so we read only the handful of candidate
+    polygons covering this point, never a whole state (let alone all of them).
+    """
+    point = Point(lon, lat)
+    results = {}
+    state_fips = None
+
+    for dtype, label in DISTRICT_LEVELS:
+        try:
+            candidates = gpd.read_file(
+                GPKG_PATH, layer=dtype, bbox=(lon, lat, lon, lat)
+            )
+        except Exception:
+            continue                      # layer absent (e.g. no scsd) or unreadable
+
+        if candidates.empty:
+            continue
+
+        # bbox is an approximation (it matches polygon envelopes), so still do
+        # the exact containment test.
+        matches = candidates[candidates.geometry.contains(point)]
+        if matches.empty:
+            continue
+
+        row = matches.iloc[0]
+        results[label] = {
+            "name": row["NAME"],
+            "geoid": row["GEOID"],
+            "low_grade": row.get("LOGRADE", ""),
+            "high_grade": row.get("HIGRADE", ""),
+        }
+        state_fips = state_fips or row.get("STATE_FIPS")
+
+    if not results:
+        return None
+    return {"school_districts": results, "state_fips": state_fips}
+
+
 def lookup_coords(lat: float, lon: float) -> dict:
     """
     Direct lookup from coordinates.
-    Tries all available state shapefiles to find matching district.
+    Uses the GeoPackage when built; otherwise scans per-state shapefiles.
     """
     result = {
         "coordinates": {"lat": lat, "lon": lon},
         "school_districts": None,
         "error": None
     }
+
+    if os.path.exists(GPKG_PATH):
+        found = _lookup_gpkg(lat, lon)
+        if found:
+            result.update(found)
+            return result
+        result["error"] = "No matching school district found in available data"
+        return result
 
     available_states = set()
     for f in glob.glob(os.path.join(DATA_DIR, "tl_2023_*_unsd.shp")):
