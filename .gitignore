@@ -4,3 +4,9 @@ __pycache__/
 # User's saved searches + notification dedup state (runtime data)
 notify/saved_searches.json
 notify/notify_state.json
+
+# Persistent school data / GreatSchools cache
+cache/
+
+# CLI search output
+output/

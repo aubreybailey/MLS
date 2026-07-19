@@ -18,6 +18,7 @@ COPY scripts/ ./scripts/
 COPY search.py .
 COPY web.py .
 COPY notify.py .
+COPY db.py .
 COPY us_cities.csv .
 
 # Expose Streamlit port

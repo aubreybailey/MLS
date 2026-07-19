@@ -30,6 +30,7 @@ warnings.filterwarnings('ignore')
 from homeharvest import scrape_property
 from school_district_lookup import lookup_coords
 from greatschools_scraper import get_ratings_by_level
+import db
 
 def haversine_miles(lat1, lon1, lat2, lon2):
     """Great-circle distance in miles between two lat/lon points."""
@@ -130,10 +131,17 @@ def _overpass_zip_near(lat: float, lon: float, radius_m: int = 2000) -> str:
 def _resolve_town_zip(name: str, tlat: float, tlon: float, state: str) -> str:
     """Resolve one town to a zip: Overpass postcode nodes first (parallel-safe),
     Nominatim only as a rate-limited fallback."""
+    key = f'{name}|{state}'
+    cached = db.get('town_zip', key)
+    if cached:
+        return cached
+
     code = _overpass_zip_near(tlat, tlon)
     if not code:
         nom = _nominatim_lookup(f"{name}, {state}")
         code = nom.get('address', {}).get('postcode', '')
+    if code:                       # don't cache a failed lookup
+        db.put('town_zip', key, code)
     return code
 
 
@@ -143,6 +151,11 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
     sorted nearest-first. One Overpass call with a hard timeout; returns [] on
     failure so the caller falls back to the primary city only. Zip resolution is
     deferred to the caller, which resolves towns lazily as it expands outward."""
+    cache_key = f'{round(lat, 2)},{round(lon, 2)},{radius_miles}'
+    cached = db.get('towns', cache_key)
+    if cached is not None:
+        return [tuple(t) for t in cached]     # JSON round-trips tuples to lists
+
     radius_m = int(radius_miles * 1609.34)
     query = (f'[out:json][timeout:20];'
              f'(node["place"~"^(city|town)$"](around:{radius_m},{lat},{lon}););'
@@ -161,6 +174,8 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
         if name and tlat is not None and tlon is not None:
             towns.append((haversine_miles(lat, lon, tlat, tlon), name, tlat, tlon))
     towns.sort(key=lambda t: t[0])
+    if towns:                      # don't cache a failed/empty Overpass call
+        db.put('towns', cache_key, towns)
     return towns
 
 
@@ -212,18 +227,29 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         except Exception:
             pass
 
-        cache_key = f'{round(float(lat), 2)},{round(float(lon), 2)}'
+        # Query the cell centroid, not the listing's raw coords: the cache key is
+        # quantized to ~1km, so fetching by raw coords would let two listings in
+        # the same cell issue different radius queries and race to overwrite one
+        # key with different ratings. Centroid keeps key and value consistent.
+        cell_lat, cell_lon = round(float(lat), 2), round(float(lon), 2)
+        cache_key = f'{cell_lat},{cell_lon}'
+        # Three tiers: in-memory (this run) -> sqlite (across runs) -> scrape.
         with cache_lock:
             r = ratings_cache.get(cache_key)
+        if r is None:
+            r = db.get('ratings', cache_key)
         if r is None:
             # Fetch outside the lock; concurrent duplicate fetches of the same
             # ~1km cell are wasteful but harmless.
             try:
-                r = get_ratings_by_level(float(lat), float(lon))
+                r = get_ratings_by_level(cell_lat, cell_lon)
+                # Only persist real results — caching a failed scrape would
+                # blank out this cell for the whole TTL.
+                db.put('ratings', cache_key, r)
             except Exception:
                 r = {'elementary': {}, 'middle': {}, 'high': {}}
-            with cache_lock:
-                ratings_cache[cache_key] = r
+        with cache_lock:
+            ratings_cache[cache_key] = r
 
         elem_data = r.get('elementary', {})
         mid_data = r.get('middle', {})

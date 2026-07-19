@@ -15,9 +15,11 @@ services:
       - NTFY_SERVER=${NTFY_SERVER:-http://192.168.1.4}
       - SAVED_SEARCHES=/app/notify/saved_searches.json
       - NOTIFY_STATE=/app/notify/notify_state.json
+      - SCHOOLS_DB=/app/cache/schools.db
     volumes:
       - ./data:/app/data:ro
       - ./notify:/app/notify          # writable: "Create notification" saves here
+      - ./cache:/app/cache            # shared GreatSchools cache (web/cli/notify)
 
   # CLI for one-off searches
   # Usage: docker-compose run --rm cli "Providence, RI" --limit 50
@@ -25,9 +27,11 @@ services:
     build: .
     environment:
       - PROJ_DATA=/opt/conda/envs/rental-search/share/proj
+      - SCHOOLS_DB=/app/cache/schools.db
     volumes:
       - ./data:/app/data:ro
       - ./output:/app/output
+      - ./cache:/app/cache
     working_dir: /app/output
     entrypoint: ["python", "/app/search.py"]
     profiles:
@@ -44,9 +48,11 @@ services:
       - NTFY_SERVER=${NTFY_SERVER:-http://192.168.1.4}
       - SAVED_SEARCHES=/app/notify/saved_searches.json
       - NOTIFY_STATE=/app/notify/notify_state.json
+      - SCHOOLS_DB=/app/cache/schools.db
     volumes:
       - ./data:/app/data:ro
       - ./notify:/app/notify
+      - ./cache:/app/cache
     working_dir: /app
     entrypoint: ["python", "/app/notify.py"]
     profiles:

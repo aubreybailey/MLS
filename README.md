@@ -108,6 +108,21 @@ Subscribe to your topic in the ntfy app (or `http://192.168.1.4/<topic>`). The
 Dedup state lives in `notify/notify_state.json` (a listing is "new" the first time
 its URL is seen).
 
+## Local Cache (`cache/schools.db`)
+
+External lookups are cached in SQLite (`db.py`) and shared by the web UI, CLI,
+and the notify cron, so repeat searches don't re-scrape:
+
+| Namespace | What | TTL |
+|-----------|------|-----|
+| `ratings` | GreatSchools ratings per ~1km cell | 90 days |
+| `towns` | Overpass town discovery per center+radius | 365 days |
+| `town_zip` | Town -> ZIP resolution | 365 days |
+
+A warm search runs ~6x faster than a cold one (40s -> 7s for 8 hits at 15mi).
+Failed lookups are never cached. Inspect with `python db.py`; reset by deleting
+`cache/schools.db`. Override the location with `SCHOOLS_DB`.
+
 ## Warning Flags
 
 Listings are automatically flagged:
