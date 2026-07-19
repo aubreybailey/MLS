@@ -239,7 +239,11 @@ python scripts/test_school_match.py     # 32 cases, all from real failures
 
 ```
 web.py                  Streamlit UI
-search.py               Core search + enrichment, and the CLI
+search.py               Quota-fill orchestration, DataFrame assembly, CLI, map
+api.py                  Data-access facade: every read goes through here
+                        (get_schools, get_districts, get_attendance_zone,
+                        resolve_school, enrich_listing, get_listings, ...);
+                        plain args, JSON-serializable returns -- MCP-wrappable
 db.py                   SQLite store: caches, schools, school_ratings
 notify.py               Saved searches -> ntfy
 scripts/

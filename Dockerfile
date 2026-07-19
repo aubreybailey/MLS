@@ -19,6 +19,7 @@ COPY search.py .
 COPY web.py .
 COPY notify.py .
 COPY db.py .
+COPY api.py .
 COPY us_cities.csv .
 COPY download_data.sh .
 

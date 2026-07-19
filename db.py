@@ -187,9 +187,24 @@ def put_school_rating(ncessch: str, rating, matched_name: str = '',
         pass
 
 
+def _rating_is_fresh(rating, fetched_at, source,
+                     max_age_days: int = RATING_TTL_DAYS) -> bool:
+    """Is a stored rating still usable? Hand-entered rows (source='manual')
+    never expire -- you entered them deliberately."""
+    if rating is None:
+        return False
+    if source != 'manual' and fetched_at:
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(fetched_at)
+            if age > timedelta(days=max_age_days):
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def get_school_rating(ncessch: str, max_age_days: int = RATING_TTL_DAYS):
-    """Rating for one school, or None if absent/stale. Hand-entered rows
-    (source='manual') never expire -- you entered them deliberately."""
+    """Rating for one school, or None if absent/stale."""
     try:
         with _lock:
             cur = _connect().execute(
@@ -197,30 +212,56 @@ def get_school_rating(ncessch: str, max_age_days: int = RATING_TTL_DAYS):
                 (ncessch,),
             )
             row = cur.fetchone()
-        if row is None or row[0] is None:
+        if row is None or not _rating_is_fresh(row[0], row[1], row[2], max_age_days):
             return None
-        if row[2] != 'manual' and row[1]:
-            if datetime.now(timezone.utc) - datetime.fromisoformat(row[1]) > timedelta(days=max_age_days):
-                return None
         return row[0]
+    except Exception:
+        return None
+
+
+def get_school(ncessch: str):
+    """One school directory row joined with its (fresh) rating, or None."""
+    try:
+        with _lock:
+            cur = _connect().execute(
+                'SELECT s.ncessch, s.name, s.leaid, s.state, s.city, s.lat, s.lon, '
+                's.grade_lo, s.grade_hi, s.level, s.enrollment, '
+                'r.rating, r.fetched_at, r.source '
+                'FROM schools s LEFT JOIN school_ratings r ON r.ncessch = s.ncessch '
+                'WHERE s.ncessch = ?', (ncessch,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = ('ncessch', 'name', 'leaid', 'state', 'city', 'lat', 'lon',
+                'grade_lo', 'grade_hi', 'level', 'enrollment')
+        d = dict(zip(keys, row[:11]))
+        rating, fetched_at, source = row[11], row[12], row[13]
+        fresh = _rating_is_fresh(rating, fetched_at, source)
+        d['rating'] = rating if fresh else None
+        d['rating_source'] = source if fresh else None
+        return d
     except Exception:
         return None
 
 
 def schools_near(lat: float, lon: float, radius_miles: float = 5.0,
                  level: str = None, limit: int = 100) -> list:
-    """Schools near a point, nearest first. Uses a bounding box in SQL (indexed)
+    """Schools near a point, nearest first, each joined with its (fresh)
+    rating as 'rating'/'rating_source'. Uses a bounding box in SQL (indexed)
     then exact haversine in Python -- fine at this table size."""
     import math
     try:
         dlat = radius_miles / 69.0
         dlon = radius_miles / max(0.1, 69.0 * math.cos(math.radians(lat)))
-        sql = ('SELECT ncessch, name, leaid, state, city, lat, lon, grade_lo, '
-               'grade_hi, level, enrollment FROM schools '
-               'WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?')
+        sql = ('SELECT s.ncessch, s.name, s.leaid, s.state, s.city, s.lat, s.lon, '
+               's.grade_lo, s.grade_hi, s.level, s.enrollment, '
+               'r.rating, r.fetched_at, r.source '
+               'FROM schools s LEFT JOIN school_ratings r ON r.ncessch = s.ncessch '
+               'WHERE s.lat BETWEEN ? AND ? AND s.lon BETWEEN ? AND ?')
         args = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
         if level:
-            sql += ' AND level = ?'
+            sql += ' AND s.level = ?'
             args.append(level)
         with _lock:
             rows = _connect().execute(sql, args).fetchall()
@@ -236,12 +277,17 @@ def schools_near(lat: float, lon: float, radius_miles: float = 5.0,
                 'grade_lo', 'grade_hi', 'level', 'enrollment')
         out = []
         for r in rows:
-            d = dict(zip(keys, r))
+            d = dict(zip(keys, r[:11]))
             if d['lat'] is None or d['lon'] is None:
                 continue
             d['distance_mi'] = hav(d['lat'], d['lon'])
-            if d['distance_mi'] <= radius_miles:
-                out.append(d)
+            if d['distance_mi'] > radius_miles:
+                continue
+            rating, fetched_at, source = r[11], r[12], r[13]
+            fresh = _rating_is_fresh(rating, fetched_at, source)
+            d['rating'] = rating if fresh else None
+            d['rating_source'] = source if fresh else None
+            out.append(d)
         out.sort(key=lambda d: d['distance_mi'])
         return out[:limit]
     except Exception:

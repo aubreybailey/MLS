@@ -11,15 +11,7 @@ Usage:
 import argparse
 import sys
 import os
-import math
-import time
-import threading
-import urllib.request
-import json
-import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 
 import pandas as pd
 import folium
@@ -27,23 +19,21 @@ from folium import DivIcon
 import warnings
 warnings.filterwarnings('ignore')
 
-from homeharvest import scrape_property
-from school_district_lookup import lookup_coords, lookup_attendance_zone
-from school_match import names_match
-from greatschools_scraper import get_ratings_by_level
-import db
-
-def haversine_miles(lat1, lon1, lat2, lon2):
-    """Great-circle distance in miles between two lat/lon points."""
-    R = 3958.8
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
+# All data access (db, GPKG lookups, GreatSchools, Nominatim/Overpass,
+# homeharvest listings) goes through the api facade. This module is
+# orchestration only: quota-fill, DataFrame assembly, CLI, map.
+import api
+from api import haversine_miles
 
 
-ROOM_KEYWORDS = ['rooming', 'room for rent', 'room rental', 'single room',
-                 'not the entire', 'shared', 'room in', 'one room', '1 room']
+# The radius search expands town-by-town (nearest first) only until the hit
+# quota is filled, so there is no fixed town count. This is just a generous
+# safety ceiling so a strict filter over a dense metro can't try to scrape an
+# unbounded number of towns (and get the scraper IP-blocked); normal searches
+# fill their quota long before reaching it.
+MAX_TOWNS_EXPAND = 60
+# Which record field each user-selectable school level filters on.
+SCHOOL_LEVELS = {'elementary': 'elem', 'middle': 'mid', 'high': 'high'}
 
 
 def get_color(rating):
@@ -54,377 +44,6 @@ def get_color(rating):
     elif rating >= 6: return '#FFA500'
     elif rating >= 5: return '#FF6347'
     else: return '#DC143C'
-
-
-# Nominatim's usage policy caps clients at ~1 request/second and requires an
-# identifying User-Agent. This lock + timestamp enforces that spacing across
-# threads so parallel workers can't stampede the public server.
-_NOMINATIM_UA = 'school-rental-search/1.0 (github.com/MLS rental+school finder)'
-_OVERPASS_UA = _NOMINATIM_UA
-_nominatim_lock = threading.Lock()
-_nominatim_last = [0.0]
-_NOMINATIM_MIN_INTERVAL = 1.1  # seconds between Nominatim calls
-
-
-def _http_get_json(url: str, timeout: float, user_agent: str):
-    """GET a URL and parse JSON, with a hard timeout. Returns None on any failure."""
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': user_agent})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except Exception:
-        return None
-
-
-def _nominatim_get(url: str, timeout: float = 8.0):
-    """Rate-limited Nominatim GET (>=1.1s between calls, process-wide)."""
-    with _nominatim_lock:
-        wait = _NOMINATIM_MIN_INTERVAL - (time.monotonic() - _nominatim_last[0])
-        if wait > 0:
-            time.sleep(wait)
-        result = _http_get_json(url, timeout, _NOMINATIM_UA)
-        _nominatim_last[0] = time.monotonic()
-    return result
-
-
-def geocode_location(location: str):
-    """Return (lat, lon, state_abbr) for a location string using Nominatim."""
-    url = (f"https://nominatim.openstreetmap.org/search"
-           f"?q={urllib.parse.quote(location)}&format=json&limit=1&addressdetails=1")
-    data = _nominatim_get(url, timeout=8.0)
-    if data:
-        addr = data[0].get('address', {})
-        state = addr.get('ISO3166-2-lvl4', '').replace('US-', '') or ''
-        return float(data[0]['lat']), float(data[0]['lon']), state
-    return None, None, None
-
-
-def _nominatim_lookup(query_str: str) -> dict:
-    url = (f"https://nominatim.openstreetmap.org/search"
-           f"?q={urllib.parse.quote(query_str)}&format=json&limit=1&addressdetails=1")
-    data = _nominatim_get(url, timeout=8.0)
-    return data[0] if data else {}
-
-
-# The radius search expands town-by-town (nearest first) only until the hit
-# quota is filled, so there is no fixed town count. This is just a generous
-# safety ceiling so a strict filter over a dense metro can't try to scrape an
-# unbounded number of towns (and get the scraper IP-blocked); normal searches
-# fill their quota long before reaching it.
-MAX_TOWNS_EXPAND = 60
-_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
-
-
-def _overpass_zip_near(lat: float, lon: float, radius_m: int = 2000) -> str:
-    """Find the most common addr:postcode on nodes near a point."""
-    query = (f'[out:json][timeout:10];'
-             f'node["addr:postcode"](around:{radius_m},{lat},{lon});'
-             f'out tags;')
-    url = f"{_OVERPASS_ENDPOINT}?data={urllib.parse.quote(query)}"
-    result = _http_get_json(url, timeout=12.0, user_agent=_OVERPASS_UA)
-    if not result:
-        return ''
-    codes = [e['tags']['addr:postcode'] for e in result.get('elements', [])
-             if 'addr:postcode' in e.get('tags', {})]
-    return max(set(codes), key=codes.count) if codes else ''
-
-
-def _resolve_town_zip(name: str, tlat: float, tlon: float, state: str) -> str:
-    """Resolve one town to a zip: Overpass postcode nodes first (parallel-safe),
-    Nominatim only as a rate-limited fallback."""
-    key = f'{name}|{state}'
-    cached = db.get('town_zip', key)
-    if cached:
-        return cached
-
-    code = _overpass_zip_near(tlat, tlon)
-    if not code:
-        nom = _nominatim_lookup(f"{name}, {state}")
-        code = nom.get('address', {}).get('postcode', '')
-    if code:                       # don't cache a failed lookup
-        db.put('town_zip', key, code)
-    return code
-
-
-def _towns_within(lat: float, lon: float, radius_miles: float,
-                  verbose: bool = False) -> list:
-    """All town/city nodes within radius as (dist_miles, name, tlat, tlon),
-    sorted nearest-first. One Overpass call with a hard timeout; returns [] on
-    failure so the caller falls back to the primary city only. Zip resolution is
-    deferred to the caller, which resolves towns lazily as it expands outward."""
-    cache_key = f'{round(lat, 2)},{round(lon, 2)},{radius_miles}'
-    cached = db.get('towns', cache_key)
-    if cached is not None:
-        return [tuple(t) for t in cached]     # JSON round-trips tuples to lists
-
-    radius_m = int(radius_miles * 1609.34)
-    query = (f'[out:json][timeout:20];'
-             f'(node["place"~"^(city|town)$"](around:{radius_m},{lat},{lon}););'
-             f'out body;')
-    url = f"{_OVERPASS_ENDPOINT}?data={urllib.parse.quote(query)}"
-    result = _http_get_json(url, timeout=25.0, user_agent=_OVERPASS_UA)
-    if not result:
-        if verbose:
-            print("  Overpass town lookup failed/timed out; searching primary city only.")
-        return []
-
-    towns = []
-    for el in result.get('elements', []):
-        name = el.get('tags', {}).get('name', '')
-        tlat, tlon = el.get('lat'), el.get('lon')
-        if name and tlat is not None and tlon is not None:
-            towns.append((haversine_miles(lat, lon, tlat, tlon), name, tlat, tlon))
-    towns.sort(key=lambda t: t[0])
-    if towns:                      # don't cache a failed/empty Overpass call
-        db.put('towns', cache_key, towns)
-    return towns
-
-
-# SABS encodes attendance-zone level as 1/2/3; our vocabulary is by name.
-_SABS_LEVEL = {'elementary': ('1', 'primary'), 'middle': ('2', 'middle'),
-               'high': ('3', 'high')}
-
-
-def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
-                   area_avg):
-    """Best available rating for one school level at one address.
-
-    Returns (rating, best_case, school_name, source, unrated_count).
-
-    Same precedence at every level, so a filter means the same thing whichever
-    one the user picks:
-      zoned         the address's assigned school, exactly
-      district-sole the district has one school at this level, so no ambiguity
-      district-min  worst school in the district -- a floor, not a guess
-      area-avg      last resort ~3mi average; NOT a bound, since the radius
-                    crosses district lines
-    """
-    school, source, best, unrated = '', 'area-avg', None, 0
-    rating = area_avg
-
-    keys = _SABS_LEVEL.get(level, ())
-    zone = next((zones[k] for k in keys if k in zones), None) if zones else None
-    if zone:
-        school = zone.get('school', '')
-        assigned = _rating_for_school(school, zone.get('ncessch', ''), ratings)
-        if assigned is not None:
-            return assigned, None, school, 'zoned', 0
-        source = 'zoned-unrated'
-
-    if leaid:
-        cands = db.schools_in_district(leaid, level)
-        rated = [c for c in cands if c.get('rating') is not None]
-        if rated:
-            worst = min(c['rating'] for c in rated)
-            if len(cands) == 1:
-                return worst, worst, cands[0]['name'], 'district-sole', 0
-            return (worst, max(c['rating'] for c in rated), school,
-                    'district-min', len(cands) - len(rated))
-    return rating, best, school, source, unrated
-
-
-def _elem_note(source: str, worst, best, unrated: int) -> str:
-    """User-facing caveat for the elementary rating. Empty when exact."""
-    if source in ('zoned', 'district-sole'):
-        return ''
-    if source == 'district-min':
-        rng = f"{worst}-{best}" if best is not None and best != worst else f"{worst}"
-        note = f"not exact - worst case ({rng} across district)"
-        if unrated:
-            return note + f", {unrated} unrated"
-        return note
-    if source == 'zoned-unrated':
-        return 'school known, no rating available'
-    return '*confirm elementary - area average only'
-
-
-def _rating_for_school(name: str, ncessch: str, ratings: dict):
-    """Rating for one specific school.
-
-    Prefers the schools table (exact, keyed by NCES id, populated by
-    scripts/backfill_school_ratings.py) and falls back to name-matching within
-    this cell's GreatSchools payload. Returns None when the school can't be
-    identified confidently -- the caller then keeps the area average and marks
-    it unconfirmed rather than attaching another school's number."""
-    if ncessch:
-        stored = db.get_school_rating(ncessch)
-        if stored is not None:
-            return stored
-    if not name:
-        return None
-    for level in ('elementary', 'middle', 'high', 'other'):
-        for s in (ratings.get(level) or {}).get('schools', []) or []:
-            if s.get('rating') is not None and names_match(name, s.get('name', '')):
-                return s['rating']
-    return None
-
-
-def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
-    """Enrich one raw listing row with warning flags and school data.
-
-    Thread-safe: only the shared ratings_cache is mutated, and only under
-    cache_lock. lookup_coords is lru_cache'd (already thread-safe)."""
-    lat, lon = row.get('latitude'), row.get('longitude')
-    sqft, price = row.get('sqft'), row.get('list_price')
-    days_on_mls = row.get('days_on_mls')
-    text = str(row.get('text', '')).lower() if pd.notna(row.get('text')) else ''
-
-    # Build warning flags
-    flags = []
-    if pd.notna(row.get('unit')) and row.get('unit'):
-        flags.append('UNIT')
-    if any(kw in text for kw in ROOM_KEYWORDS):
-        flags.append('ROOM')
-    if pd.notna(sqft) and sqft > 10000:
-        flags.append('SQFT?')
-    if pd.notna(sqft) and pd.notna(price) and sqft > 0 and price / sqft < 0.50:
-        flags.append('PRICE?')
-    if pd.notna(days_on_mls) and days_on_mls > 60:
-        flags.append(f'OLD({int(days_on_mls)}d)')
-    style = str(row.get('style', '')).upper() if pd.notna(row.get('style')) else ''
-    if any(x in style for x in ['CONDO', 'DUPLEX', 'MULTI', 'TRIPLEX']):
-        flags.append('MULTI')
-
-    # Get school data
-    district, district_grades = '', ''
-    district_hs, district_hs_grades = '', ''
-    elem_school, elem_source = '', 'area-avg'
-    mid_school, mid_source = '', 'area-avg'
-    high_school_name, high_source = '', 'area-avg'
-    elem_best = mid_best = high_best = None
-    elem_unrated = mid_unrated = high_unrated = 0
-    elem_leaid, hs_leaid = '', ''
-    elem, mid, high = None, None, None
-    top_school, top_rating = '', None
-    school_count = 0
-
-    if pd.notna(lat) and pd.notna(lon):
-        try:
-            dr = lookup_coords(float(lat), float(lon))
-            if dr and not dr.get('error'):
-                d = dr.get('school_districts', {})
-
-                def _fmt(info):
-                    return (info.get('name', ''),
-                            f"{info.get('low_grade', '?')}-{info.get('high_grade', '?')}")
-
-                # A point is served either by one unified district or by an
-                # elementary + secondary pair -- never both (verified: zero
-                # overlap across 166 sampled points in 26 states). Surface the
-                # secondary district separately so the high-school district
-                # isn't dropped, which it was for all 20 scsd states.
-                if 'unified' in d:
-                    district, district_grades = _fmt(d['unified'])
-                    elem_leaid = d['unified'].get('geoid', '')
-                else:
-                    if 'elementary' in d:
-                        district, district_grades = _fmt(d['elementary'])
-                        elem_leaid = d['elementary'].get('geoid', '')
-                    if 'secondary' in d:
-                        district_hs, district_hs_grades = _fmt(d['secondary'])
-                        hs_leaid = d['secondary'].get('geoid', '')
-        except Exception:
-            pass
-
-        # Query the cell centroid, not the listing's raw coords: the cache key is
-        # quantized to ~1km, so fetching by raw coords would let two listings in
-        # the same cell issue different radius queries and race to overwrite one
-        # key with different ratings. Centroid keeps key and value consistent.
-        cell_lat, cell_lon = round(float(lat), 2), round(float(lon), 2)
-        cache_key = f'{cell_lat},{cell_lon}'
-        # Three tiers: in-memory (this run) -> sqlite (across runs) -> scrape.
-        with cache_lock:
-            r = ratings_cache.get(cache_key)
-        if r is None:
-            r = db.get('ratings_v2', cache_key)
-        if r is None:
-            # Fetch outside the lock; concurrent duplicate fetches of the same
-            # ~1km cell are wasteful but harmless.
-            try:
-                r = get_ratings_by_level(cell_lat, cell_lon)
-                # Only persist real results — caching a failed scrape would
-                # blank out this cell for the whole TTL.
-                db.put('ratings_v2', cache_key, r)
-            except Exception:
-                r = {'elementary': {}, 'middle': {}, 'high': {}}
-        with cache_lock:
-            ratings_cache[cache_key] = r
-
-        elem_data = r.get('elementary', {})
-        mid_data = r.get('middle', {})
-        high_data = r.get('high', {})
-
-        elem = elem_data.get('rating')
-        mid = mid_data.get('rating')
-        high = high_data.get('rating')
-
-        # Resolve every level the same way, so whichever level the user
-        # filters on carries the same guarantee. See _resolve_level.
-        try:
-            z = lookup_attendance_zone(float(lat), float(lon), row.get('state'))
-            zones = z.get('zones') or {} if z.get('status') == 'assigned' else {}
-
-            elem, elem_best, elem_school, elem_source, elem_unrated = _resolve_level(
-                'elementary', zones, elem_leaid, r, elem)
-            mid, mid_best, mid_school, mid_source, mid_unrated = _resolve_level(
-                'middle', zones, elem_leaid, r, mid)
-            # High school often sits in a separate secondary district; fall back
-            # to the unified district when there isn't one.
-            high, high_best, high_school_name, high_source, high_unrated = _resolve_level(
-                'high', zones, hs_leaid or elem_leaid, r, high)
-        except Exception:
-            pass
-
-        # Get top school (highest rated across all levels)
-        for level_data in [elem_data, mid_data, high_data]:
-            if level_data.get('top_rating') and (top_rating is None or level_data['top_rating'] > top_rating):
-                top_school = level_data.get('top_school', '')
-                top_rating = level_data.get('top_rating')
-            school_count += level_data.get('count', 0)
-
-    return {
-        'address': row.get('full_street_line', row.get('street', '')),
-        'city': row.get('city', ''),
-        'state': row.get('state', ''),
-        'zip': row.get('zip_code', ''),
-        'price': int(price) if pd.notna(price) else None,
-        'beds': int(row['beds']) if pd.notna(row.get('beds')) else None,
-        'baths': int(row['full_baths']) if pd.notna(row.get('full_baths')) else None,
-        'sqft': int(sqft) if pd.notna(sqft) else None,
-        'lat': float(lat) if pd.notna(lat) else None,
-        'lon': float(lon) if pd.notna(lon) else None,
-        'url': row.get('property_url', ''),
-        'flags': '|'.join(flags) if flags else '',
-        'district': district,
-        'district_grades': district_grades,
-        'district_hs': district_hs,
-        'district_hs_grades': district_hs_grades,
-        'elem': elem,
-        'elem_school': elem_school,
-        'elem_best': elem_best,
-        'elem_source': elem_source,
-        # Shown verbatim. 'zoned'/'district-sole' are exact; 'district-min' is a
-        # guaranteed floor across the district's schools; anything else is a
-        # rough area average and should not be trusted without checking.
-        'elem_confirm': _elem_note(elem_source, elem, elem_best, elem_unrated),
-        'mid': mid,
-        'mid_school': mid_school,
-        'mid_best': mid_best,
-        'mid_source': mid_source,
-        'mid_confirm': _elem_note(mid_source, mid, mid_best, mid_unrated),
-        'high': high,
-        'high_school': high_school_name,
-        'high_best': high_best,
-        'high_source': high_source,
-        'high_confirm': _elem_note(high_source, high, high_best, high_unrated),
-        'top_school': top_school,
-        'top_rating': top_rating,
-        'school_count': school_count,
-    }
-
-
-# Which record field each user-selectable school level filters on.
-SCHOOL_LEVELS = {'elementary': 'elem', 'middle': 'mid', 'high': 'high'}
 
 
 def _passes(rec: dict, min_rating, hide_flagged: bool, hide_units: bool,
@@ -467,9 +86,10 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
     center_lat = center_lon = state = None
     towns = []
     if radius_miles:
-        center_lat, center_lon, state = geocode_location(location)
+        g = api.geocode(location)
+        center_lat, center_lon, state = g['lat'], g['lon'], g['state']
         if center_lat is not None:
-            towns = _towns_within(center_lat, center_lon, radius_miles, verbose)[:MAX_TOWNS_EXPAND]
+            towns = api.towns_within(center_lat, center_lon, radius_miles, verbose)[:MAX_TOWNS_EXPAND]
             if verbose:
                 print(f"Searching {location} + up to {len(towns)} towns within "
                       f"{radius_miles} mi, expanding until {limit} hits...")
@@ -479,21 +99,21 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
         print(f"Searching rentals in {location}...")
 
     seen = set()                       # dedup listings across the city + overlapping zips
-    ratings_cache, cache_lock = {}, threading.Lock()
+    session = api.new_session()        # per-run memo for area-ratings cells
     hits, scanned, pool, towns_used = [], 0, 0, 0
 
     def _location_stream():
         """Primary city first, then towns nearest->farthest. Each town's zip is
         resolved lazily (only once we reach it), falling back to 'Town, ST'."""
         yield location, None
-        for dist, name, tlat, tlon in towns:
-            code = _resolve_town_zip(name, tlat, tlon, state)
-            yield (code or f"{name}, {state}"), dist
+        for t in towns:
+            code = api.town_zip(t['name'], t['lat'], t['lon'], state)
+            yield (code or f"{t['name']}, {state}"), t['distance_mi']
 
     def _prefilter(raw):
         """Yield rows passing the cheap pre-enrichment filters (beds/price/radius
         mask), deduped, so school enrichment is only spent on real candidates."""
-        for _, row in raw.iterrows():
+        for row in raw:
             key = (row.get('full_street_line', row.get('street', '')), row.get('city', ''))
             if key in seen:
                 continue
@@ -519,12 +139,12 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
             if dist is not None:
                 towns_used += 1
             try:
-                raw = scrape_property(location=loc, listing_type='for_rent', past_days=30)
+                raw = api.get_listings(loc)
             except Exception as e:
                 if verbose:
                     print(f"  {loc}: skipped ({e})")
                 continue
-            if raw is None or raw.empty:
+            if not raw:
                 continue
             rows = list(_prefilter(raw))
             pool += len(rows)
@@ -532,7 +152,7 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
                 if len(hits) >= limit:
                     break
                 enriched = list(ex.map(
-                    lambda r: _enrich_row(r, ratings_cache, cache_lock), chunk))
+                    lambda r: api.enrich_listing(r, session), chunk))
                 for rec in enriched:
                     scanned += 1
                     if not _passes(rec, min_rating, hide_flagged, hide_units,

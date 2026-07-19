@@ -33,9 +33,9 @@ from school_match import best_match, match_by_distinctive_token
 
 def geocode(location: str):
     """Resolve a place name via the app's existing geocoder."""
-    from search import geocode_location
-    lat, lon, _state = geocode_location(location)
-    return lat, lon
+    from api import geocode as api_geocode
+    g = api_geocode(location)
+    return g['lat'], g['lon']
 
 
 def cells_for(schools: list, precision: int = 2) -> list:
