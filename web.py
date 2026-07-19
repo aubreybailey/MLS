@@ -57,7 +57,8 @@ def search_cities(term: str) -> list[str]:
 
 @st.cache_data(ttl=3600)
 def fetch_listings(location: str, limit: int, radius_miles: float,
-                   min_beds: int, max_price: int, min_elem: float,
+                   min_beds: int, max_price: int, min_rating: float,
+                   school_level: str, min_sqft: int,
                    hide_flagged: bool, hide_units: bool) -> pd.DataFrame:
     """Fetch and annotate listings via search_and_enrich. All filter params are
     part of the cache key because they change which listings are returned."""
@@ -74,7 +75,8 @@ def fetch_listings(location: str, limit: int, radius_miles: float,
     try:
         df = search_and_enrich(location=location, limit=limit,
                                min_beds=min_beds, max_price=max_price,
-                               min_elem=min_elem, hide_flagged=hide_flagged,
+                               min_rating=min_rating, school_level=school_level,
+                               min_sqft=min_sqft, hide_flagged=hide_flagged,
                                hide_units=hide_units,
                                radius_miles=radius_miles,
                                progress_cb=_on_progress, verbose=False)
@@ -192,7 +194,23 @@ st.sidebar.subheader("Filters")
 max_price = st.sidebar.number_input("Max price ($/month, 0 = no cap)",
                                     min_value=0, value=0, step=100)
 min_beds = st.sidebar.selectbox("Min Bedrooms", [0, 1, 2, 3, 4, 5], index=0)
-min_elem = st.sidebar.slider("Min Elementary Rating", 0.0, 10.0, 0.0, step=0.5)
+min_sqft = st.sidebar.number_input("Min sqft (0 = no minimum)",
+                                   min_value=0, value=0, step=100,
+                                   help="Listings without a square footage are "
+                                        "excluded when this is set.")
+
+_LEVEL_LABELS = {"Elementary": "elementary", "Intermediate": "middle", "High": "high"}
+school_level_label = st.sidebar.radio(
+    "School level to filter on", list(_LEVEL_LABELS), horizontal=True,
+    help="The rating filter applies to this level only. All three are still "
+         "shown in the results.")
+school_level = _LEVEL_LABELS[school_level_label]
+min_rating = st.sidebar.slider(f"Min {school_level_label} Rating",
+                               0.0, 10.0, 0.0, step=0.5,
+                               help="Where the assigned school is unknown, the "
+                                    "rating shown is the WORST school in the "
+                                    "district, so this filter is a floor rather "
+                                    "than an estimate.")
 hide_flagged = st.sidebar.checkbox("Hide flagged listings", value=False)
 hide_units = st.sidebar.checkbox("Hide UNIT (apartments)", value=False)
 
@@ -211,8 +229,8 @@ if st.sidebar.button("🔄 Clear Cache"):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Daily notification")
 _notif_name = location + (f" +{radius}mi" if radius else "")
-if min_elem > 0:
-    _notif_name += f", elem {min_elem:g}+"
+if min_rating > 0:
+    _notif_name += f", {school_level} {min_rating:g}+"
 notif_topic = st.sidebar.text_input(
     "ntfy topic", value=slugify(location),
     help="New matches get pushed to this ntfy topic daily. Subscribe to it in the ntfy app.")
@@ -227,7 +245,9 @@ if st.sidebar.button("🔔 Create notification"):
             "limit": limit,
             "min_beds": min_beds if min_beds > 0 else None,
             "max_price": max_price if max_price > 0 else None,
-            "min_elem": min_elem if min_elem > 0 else None,
+            "min_rating": min_rating if min_rating > 0 else None,
+            "school_level": school_level,
+            "min_sqft": min_sqft or None,
             "hide_flagged": hide_flagged,
             "hide_units": hide_units,
             "topic": notif_topic or slugify(location),
@@ -252,7 +272,9 @@ if search_clicked and location:
         location, limit, radius_miles,
         min_beds if min_beds > 0 else None,
         max_price if max_price > 0 else None,
-        min_elem if min_elem > 0 else None,
+        min_rating if min_rating > 0 else None,
+        school_level,
+        min_sqft or None,
         hide_flagged, hide_units,
     )
     st.session_state.last_location = location
@@ -334,9 +356,13 @@ st.markdown("""
 # Table
 st.subheader(f"Listings ({len(filtered)})")
 if len(filtered) > 0:
-    cols = ['address', 'city', 'price', 'beds', 'baths', 'sqft',
-            'elem', 'elem_best', 'elem_school', 'elem_confirm', 'mid', 'high',
-            'district', 'district_hs', 'flags', 'url']
+    # Put the level being filtered on first, with its school and caveat, then
+    # the other two levels for context.
+    _pfx = {'elementary': 'elem', 'middle': 'mid', 'high': 'high'}[school_level]
+    _others = [p for p in ('elem', 'mid', 'high') if p != _pfx]
+    cols = (['address', 'city', 'price', 'beds', 'baths', 'sqft',
+             _pfx, f'{_pfx}_best', f'{_pfx}_school', f'{_pfx}_confirm']
+            + _others + ['district', 'district_hs', 'flags', 'url'])
     # Tolerate frames cached before district_hs existed.
     display_df = filtered[[c for c in cols if c in filtered.columns]].copy()
     display_df = display_df.sort_values('elem', ascending=False, na_position='last')
@@ -351,15 +377,15 @@ if len(filtered) > 0:
             "high": st.column_config.NumberColumn("High", format="%.1f"),
             "district": st.column_config.TextColumn("District"),
             "district_hs": st.column_config.TextColumn("HS District"),
-            "elem_school": st.column_config.TextColumn(
-                "Assigned Elem",
+            f"{_pfx}_school": st.column_config.TextColumn(
+                f"Assigned {school_level_label}",
                 help="The elementary school this address is zoned for (NCES SABS "
                      "2015-16). Blank means this district didn't participate."),
-            "elem_best": st.column_config.NumberColumn(
+            f"{_pfx}_best": st.column_config.NumberColumn(
                 "Best case", format="%.1f",
                 help="When the assigned school is unknown, the best-rated school in "
                      "the district. Elem shows the worst. Blank means Elem is exact."),
-            "elem_confirm": st.column_config.TextColumn(
+            f"{_pfx}_confirm": st.column_config.TextColumn(
                 "Certainty",
                 help="Blank = Elem is the assigned school's own rating. "
                      "'worst case' = assigned school unknown, so Elem is the LOWEST "

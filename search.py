@@ -180,6 +180,49 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
     return towns
 
 
+# SABS encodes attendance-zone level as 1/2/3; our vocabulary is by name.
+_SABS_LEVEL = {'elementary': ('1', 'primary'), 'middle': ('2', 'middle'),
+               'high': ('3', 'high')}
+
+
+def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
+                   area_avg):
+    """Best available rating for one school level at one address.
+
+    Returns (rating, best_case, school_name, source, unrated_count).
+
+    Same precedence at every level, so a filter means the same thing whichever
+    one the user picks:
+      zoned         the address's assigned school, exactly
+      district-sole the district has one school at this level, so no ambiguity
+      district-min  worst school in the district -- a floor, not a guess
+      area-avg      last resort ~3mi average; NOT a bound, since the radius
+                    crosses district lines
+    """
+    school, source, best, unrated = '', 'area-avg', None, 0
+    rating = area_avg
+
+    keys = _SABS_LEVEL.get(level, ())
+    zone = next((zones[k] for k in keys if k in zones), None) if zones else None
+    if zone:
+        school = zone.get('school', '')
+        assigned = _rating_for_school(school, zone.get('ncessch', ''), ratings)
+        if assigned is not None:
+            return assigned, None, school, 'zoned', 0
+        source = 'zoned-unrated'
+
+    if leaid:
+        cands = db.schools_in_district(leaid, level)
+        rated = [c for c in cands if c.get('rating') is not None]
+        if rated:
+            worst = min(c['rating'] for c in rated)
+            if len(cands) == 1:
+                return worst, worst, cands[0]['name'], 'district-sole', 0
+            return (worst, max(c['rating'] for c in rated), school,
+                    'district-min', len(cands) - len(rated))
+    return rating, best, school, source, unrated
+
+
 def _elem_note(source: str, worst, best, unrated: int) -> str:
     """User-facing caveat for the elementary rating. Empty when exact."""
     if source in ('zoned', 'district-sole'):
@@ -246,7 +289,11 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
     district, district_grades = '', ''
     district_hs, district_hs_grades = '', ''
     elem_school, elem_source = '', 'area-avg'
-    elem_best, elem_leaid, elem_unrated = None, '', 0
+    mid_school, mid_source = '', 'area-avg'
+    high_school_name, high_source = '', 'area-avg'
+    elem_best = mid_best = high_best = None
+    elem_unrated = mid_unrated = high_unrated = 0
+    elem_leaid, hs_leaid = '', ''
     elem, mid, high = None, None, None
     top_school, top_rating = '', None
     school_count = 0
@@ -275,6 +322,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
                         elem_leaid = d['elementary'].get('geoid', '')
                     if 'secondary' in d:
                         district_hs, district_hs_grades = _fmt(d['secondary'])
+                        hs_leaid = d['secondary'].get('geoid', '')
         except Exception:
             pass
 
@@ -310,44 +358,20 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         mid = mid_data.get('rating')
         high = high_data.get('rating')
 
-        # Attendance zone: which elementary does this address ACTUALLY feed
-        # into? Only SABS can answer that; nearest-school is wrong 43.6% of the
-        # time, so when there's no zone we keep the area average but mark it
-        # unconfirmed instead of implying we know the school.
+        # Resolve every level the same way, so whichever level the user
+        # filters on carries the same guarantee. See _resolve_level.
         try:
             z = lookup_attendance_zone(float(lat), float(lon), row.get('state'))
-            if z.get('status') == 'assigned':
-                # SABS 'level' 1 = primary/elementary.
-                zone = z['zones'].get('1') or z['zones'].get('primary')
-                if zone:
-                    elem_school = zone.get('school', '')
-                    assigned = _rating_for_school(elem_school, zone.get('ncessch', ''), r)
-                    if assigned is not None:
-                        elem = assigned          # this school, not an average
-                        elem_source = 'zoned'
-                    else:
-                        # We know the school but GreatSchools didn't return it.
-                        elem_source = 'zoned-unrated'
+            zones = z.get('zones') or {} if z.get('status') == 'assigned' else {}
 
-            if elem_source != 'zoned' and elem_leaid:
-                # No zone: every elementary in the district is a candidate, so
-                # report the WORST of them. Unlike the area average -- which can
-                # land above or below the truth -- a minimum is a floor, which
-                # makes min_elem a real guarantee instead of an approximation.
-                cands = db.schools_in_district(elem_leaid, 'elementary')
-                rated = [c for c in cands if c.get('rating') is not None]
-                if rated:
-                    worst = min(c['rating'] for c in rated)
-                    best = max(c['rating'] for c in rated)
-                    if len(cands) == 1:
-                        # Only one school in the district: no ambiguity at all.
-                        elem, elem_best = worst, worst
-                        elem_school = cands[0]['name']
-                        elem_source = 'district-sole'
-                    else:
-                        elem, elem_best = worst, best
-                        elem_source = 'district-min'
-                        elem_unrated = len(cands) - len(rated)
+            elem, elem_best, elem_school, elem_source, elem_unrated = _resolve_level(
+                'elementary', zones, elem_leaid, r, elem)
+            mid, mid_best, mid_school, mid_source, mid_unrated = _resolve_level(
+                'middle', zones, elem_leaid, r, mid)
+            # High school often sits in a separate secondary district; fall back
+            # to the unified district when there isn't one.
+            high, high_best, high_school_name, high_source, high_unrated = _resolve_level(
+                'high', zones, hs_leaid or elem_leaid, r, high)
         except Exception:
             pass
 
@@ -384,16 +408,34 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         # rough area average and should not be trusted without checking.
         'elem_confirm': _elem_note(elem_source, elem, elem_best, elem_unrated),
         'mid': mid,
+        'mid_school': mid_school,
+        'mid_best': mid_best,
+        'mid_source': mid_source,
+        'mid_confirm': _elem_note(mid_source, mid, mid_best, mid_unrated),
         'high': high,
+        'high_school': high_school_name,
+        'high_best': high_best,
+        'high_source': high_source,
+        'high_confirm': _elem_note(high_source, high, high_best, high_unrated),
         'top_school': top_school,
         'top_rating': top_rating,
         'school_count': school_count,
     }
 
 
-def _passes(rec: dict, min_elem, hide_flagged: bool, hide_units: bool) -> bool:
+# Which record field each user-selectable school level filters on.
+SCHOOL_LEVELS = {'elementary': 'elem', 'middle': 'mid', 'high': 'high'}
+
+
+def _passes(rec: dict, min_rating, hide_flagged: bool, hide_units: bool,
+            school_level: str = 'elementary', min_sqft=None) -> bool:
     """Does an enriched listing count as a hit under the scan filters?"""
-    if min_elem is not None and (rec['elem'] is None or rec['elem'] < min_elem):
+    if min_rating is not None:
+        field = SCHOOL_LEVELS.get(school_level, 'elem')
+        value = rec.get(field)
+        if value is None or value < min_rating:
+            return False
+    if min_sqft is not None and (rec.get('sqft') is None or rec['sqft'] < min_sqft):
         return False
     if hide_flagged and rec['flags']:
         return False
@@ -408,7 +450,8 @@ def _chunks(seq, size):
 
 
 def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
-                      max_price: int = None, min_elem: float = None,
+                      max_price: int = None, min_rating: float = None,
+                      school_level: str = 'elementary', min_sqft: int = None,
                       hide_flagged: bool = False, hide_units: bool = False,
                       radius_miles: float = None, max_workers: int = 8,
                       progress_cb=None, verbose: bool = True) -> pd.DataFrame:
@@ -492,7 +535,8 @@ def search_and_enrich(location: str, limit: int = 50, min_beds: int = None,
                     lambda r: _enrich_row(r, ratings_cache, cache_lock), chunk))
                 for rec in enriched:
                     scanned += 1
-                    if not _passes(rec, min_elem, hide_flagged, hide_units):
+                    if not _passes(rec, min_rating, hide_flagged, hide_units,
+                                   school_level, min_sqft):
                         continue
                     hits.append(rec)
                     if len(hits) >= limit:
@@ -663,7 +707,8 @@ Examples:
     python search.py "Providence, RI" --output providence_rentals
     python search.py "Austin, TX" --limit 100 --min-beds 3
     python search.py "Seattle, WA" --max-price 3500 --tsv
-    python search.py "Northborough, MA" --min-elem 7 --hide-units --limit 20
+    python search.py "Northborough, MA" --min-rating 7 --hide-units --limit 20
+    python search.py "Boston, MA" --school-level high --min-rating 8 --min-sqft 1000
         """
     )
     parser.add_argument("location", help="City/area to search (e.g., 'Providence, RI')")
@@ -672,7 +717,15 @@ Examples:
                         help="Target number of listings that pass the filters (default: 50)")
     parser.add_argument("--min-beds", type=int, help="Minimum bedrooms")
     parser.add_argument("--max-price", type=int, help="Maximum monthly rent")
-    parser.add_argument("--min-elem", type=float, help="Minimum elementary school rating; listings below (or without a rating) are skipped")
+    parser.add_argument("--min-rating", type=float,
+                        help="Minimum school rating for the chosen --school-level; "
+                             "listings below it (or without a rating) are skipped")
+    parser.add_argument("--school-level", default="elementary",
+                        choices=["elementary", "middle", "high"],
+                        help="Which school level --min-rating applies to (default: elementary)")
+    parser.add_argument("--min-sqft", type=int, help="Minimum square footage")
+    parser.add_argument("--min-elem", type=float, dest="min_rating",
+                        help=argparse.SUPPRESS)   # back-compat alias
     parser.add_argument("--hide-flagged", action="store_true", help="Skip listings with any warning flags")
     parser.add_argument("--hide-units", action="store_true", help="Skip UNIT (apartment) listings")
     parser.add_argument("--radius", type=float, help="Filter to listings within this many miles of the location center")
@@ -687,7 +740,9 @@ Examples:
         limit=args.limit,
         min_beds=args.min_beds,
         max_price=args.max_price,
-        min_elem=args.min_elem,
+        min_rating=args.min_rating,
+        school_level=args.school_level,
+        min_sqft=args.min_sqft or None,
         hide_flagged=args.hide_flagged,
         hide_units=args.hide_units,
         radius_miles=args.radius,

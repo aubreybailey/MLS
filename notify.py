@@ -34,7 +34,8 @@ NTFY_SERVER = os.environ.get("NTFY_SERVER", "http://192.168.1.4")
 
 # Fields of a saved search that get passed straight to search_and_enrich.
 SEARCH_FIELDS = ("location", "radius_miles", "limit", "min_beds", "max_price",
-                 "min_elem", "hide_flagged", "hide_units")
+                 "min_rating", "school_level", "min_sqft",
+                 "hide_flagged", "hide_units")
 
 
 def _load_json(path, default):
@@ -109,6 +110,11 @@ def process_search(cfg: dict, state: dict, dry_run: bool = False,
     name = cfg.get("name") or cfg["location"]
     topic = cfg.get("topic") or slugify(name)
     kwargs = {k: cfg[k] for k in SEARCH_FIELDS if k in cfg}
+    # Saved searches written before the level picker existed used min_elem,
+    # which meant "minimum elementary rating".
+    if "min_rating" not in kwargs and cfg.get("min_elem") is not None:
+        kwargs["min_rating"] = cfg["min_elem"]
+        kwargs.setdefault("school_level", "elementary")
     df = search_and_enrich(verbose=verbose, **kwargs)
 
     rows = df.to_dict("records") if not df.empty else []
