@@ -110,7 +110,7 @@ def backfill_state(state: str, level: str, delay: float, max_queries: int,
             for gs in (payload.get(lvl) or {}).get('schools', []) or []:
                 if gs.get('rating') is None:
                     continue
-                hit = best_match(gs.get('name', ''), nearby)
+                hit = best_match(gs.get('name', ''), nearby, gs_grades=gs.get('grades', ''))
                 if not hit:
                     unmatched += 1
                     continue
@@ -190,7 +190,7 @@ def main():
             for gs in (payload.get(level) or {}).get('schools', []) or []:
                 if gs.get('rating') is None:
                     continue
-                hit = best_match(gs.get('name', ''), nearby)
+                hit = best_match(gs.get('name', ''), nearby, gs_grades=gs.get('grades', ''))
                 if not hit:
                     unmatched += 1
                     continue
