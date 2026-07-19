@@ -166,6 +166,33 @@ Note that `area-avg` is genuinely unreliable, not merely imprecise: a 3-mile
 radius pulls in *other districts'* schools. Northborough listings showed
 6.6–7.8 that way, below the true district floor of 7.0 — it wasn't even a bound.
 
+### One-command setup per state
+
+`scripts/setup_state.py` runs every layer in dependency order. Each step is
+idempotent and resumable, so an interrupted or partial run is fixed by running
+it again.
+
+```bash
+python scripts/setup_state.py --state MA          # everything
+python scripts/setup_state.py --state MA --only ratings
+python scripts/setup_state.py --state MA --dry-run
+```
+
+| Step | Produces |
+|---|---|
+| `boundaries` | Census TIGER district shapefiles |
+| `geopackage` | `data/school_districts.gpkg` (indexed) |
+| `zones` | `data/attendance_zones.gpkg` (NCES SABS) |
+| `schools` | `schools` table in `cache/schools.db` |
+| `ratings` | `school_ratings` table |
+
+It finishes with a verification summary — school counts, rating coverage, and
+how many districts have a *complete* worst-case floor — so partial builds are
+visible rather than silent.
+
+Name matching between GreatSchools and NCES has regression tests:
+`python scripts/test_school_match.py` (32 cases).
+
 ### Schools table
 
 `cache/schools.db` holds an NCES-keyed school directory plus per-school ratings,

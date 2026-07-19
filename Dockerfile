@@ -20,6 +20,7 @@ COPY web.py .
 COPY notify.py .
 COPY db.py .
 COPY us_cities.csv .
+COPY download_data.sh .
 
 # Expose Streamlit port
 EXPOSE 8501

@@ -5,6 +5,7 @@ GreatSchools Rating Scraper
 Fetches school ratings from GreatSchools.org search results.
 """
 
+import json
 import re
 import requests
 from dataclasses import dataclass
@@ -48,6 +49,19 @@ def search_schools_by_location(
     help (distance=2,3,5,10 all return exactly 25); only paging does.
     """
     return _search_paged(lat, lon, radius_miles, grade_levels, max_pages)
+
+
+def _unescape(text: str) -> str:
+    """Decode JSON escapes left in the scraped strings.
+
+    Names are pulled straight out of an embedded JSON blob with a regex, so
+    sequences like \\u0026 survive as literal text -- 'Goddard School of
+    Science \\u0026 Technology'. That breaks name matching against NCES.
+    """
+    try:
+        return json.loads(f'"{text}"')
+    except Exception:
+        return text
 
 
 def _search_page(lat, lon, radius_miles, grade_levels, page):
@@ -114,16 +128,16 @@ def _search_page(lat, lon, radius_miles, grade_levels, page):
                         profile_m = re.search(r'"profile":"([^"]+)"', obj_str)
 
                         if name_m:
-                            name = name_m.group(1)
+                            name = _unescape(name_m.group(1))
                             if name not in seen_names:
                                 seen_names.add(name)
                                 schools.append(SchoolRating(
                                     name=name,
                                     rating=int(rating_m.group(1)) if rating_m else None,
                                     rating_scale='',
-                                    city=city_m.group(1) if city_m else '',
+                                    city=_unescape(city_m.group(1)) if city_m else '',
                                     state=state_m.group(1) if state_m else '',
-                                    grades=grades_m.group(1) if grades_m else '',
+                                    grades=_unescape(grades_m.group(1)) if grades_m else '',
                                     school_type=school_type_m.group(1) if school_type_m else '',
                                     profile_url=f"https://www.greatschools.org{profile_m.group(1)}" if profile_m else ''
                                 ))

@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db
 from greatschools_scraper import get_ratings_by_level
-from school_match import best_match
+from school_match import best_match, match_by_distinctive_token
 
 
 def geocode(location: str):
@@ -110,7 +110,9 @@ def backfill_state(state: str, level: str, delay: float, max_queries: int,
             for gs in (payload.get(lvl) or {}).get('schools', []) or []:
                 if gs.get('rating') is None:
                     continue
-                hit = best_match(gs.get('name', ''), nearby, gs_grades=gs.get('grades', ''))
+                gr = gs.get('grades', '')
+                hit = (best_match(gs.get('name', ''), nearby, gs_grades=gr)
+                       or match_by_distinctive_token(gs.get('name', ''), nearby, gs_grades=gr))
                 if not hit:
                     unmatched += 1
                     continue
@@ -190,7 +192,9 @@ def main():
             for gs in (payload.get(level) or {}).get('schools', []) or []:
                 if gs.get('rating') is None:
                     continue
-                hit = best_match(gs.get('name', ''), nearby, gs_grades=gs.get('grades', ''))
+                gr = gs.get('grades', '')
+                hit = (best_match(gs.get('name', ''), nearby, gs_grades=gr)
+                       or match_by_distinctive_token(gs.get('name', ''), nearby, gs_grades=gr))
                 if not hit:
                     unmatched += 1
                     continue
