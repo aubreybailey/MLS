@@ -180,6 +180,21 @@ def _towns_within(lat: float, lon: float, radius_miles: float,
     return towns
 
 
+def _elem_note(source: str, worst, best, unrated: int) -> str:
+    """User-facing caveat for the elementary rating. Empty when exact."""
+    if source in ('zoned', 'district-sole'):
+        return ''
+    if source == 'district-min':
+        rng = f"{worst}-{best}" if best is not None and best != worst else f"{worst}"
+        note = f"not exact - worst case ({rng} across district)"
+        if unrated:
+            return note + f", {unrated} unrated"
+        return note
+    if source == 'zoned-unrated':
+        return 'school known, no rating available'
+    return '*confirm elementary - area average only'
+
+
 def _rating_for_school(name: str, ncessch: str, ratings: dict):
     """Rating for one specific school.
 
@@ -231,6 +246,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
     district, district_grades = '', ''
     district_hs, district_hs_grades = '', ''
     elem_school, elem_source = '', 'area-avg'
+    elem_best, elem_leaid, elem_unrated = None, '', 0
     elem, mid, high = None, None, None
     top_school, top_rating = '', None
     school_count = 0
@@ -252,9 +268,11 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
                 # isn't dropped, which it was for all 20 scsd states.
                 if 'unified' in d:
                     district, district_grades = _fmt(d['unified'])
+                    elem_leaid = d['unified'].get('geoid', '')
                 else:
                     if 'elementary' in d:
                         district, district_grades = _fmt(d['elementary'])
+                        elem_leaid = d['elementary'].get('geoid', '')
                     if 'secondary' in d:
                         district_hs, district_hs_grades = _fmt(d['secondary'])
         except Exception:
@@ -310,6 +328,26 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
                     else:
                         # We know the school but GreatSchools didn't return it.
                         elem_source = 'zoned-unrated'
+
+            if elem_source != 'zoned' and elem_leaid:
+                # No zone: every elementary in the district is a candidate, so
+                # report the WORST of them. Unlike the area average -- which can
+                # land above or below the truth -- a minimum is a floor, which
+                # makes min_elem a real guarantee instead of an approximation.
+                cands = db.schools_in_district(elem_leaid, 'elementary')
+                rated = [c for c in cands if c.get('rating') is not None]
+                if rated:
+                    worst = min(c['rating'] for c in rated)
+                    best = max(c['rating'] for c in rated)
+                    if len(cands) == 1:
+                        # Only one school in the district: no ambiguity at all.
+                        elem, elem_best = worst, worst
+                        elem_school = cands[0]['name']
+                        elem_source = 'district-sole'
+                    else:
+                        elem, elem_best = worst, best
+                        elem_source = 'district-min'
+                        elem_unrated = len(cands) - len(rated)
         except Exception:
             pass
 
@@ -339,10 +377,12 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         'district_hs_grades': district_hs_grades,
         'elem': elem,
         'elem_school': elem_school,
+        'elem_best': elem_best,
         'elem_source': elem_source,
-        # Shown to the user verbatim: 'zoned' means we know the assigned school,
-        # anything else means go check before trusting the rating.
-        'elem_confirm': '' if elem_source == 'zoned' else '*confirm elementary',
+        # Shown verbatim. 'zoned'/'district-sole' are exact; 'district-min' is a
+        # guaranteed floor across the district's schools; anything else is a
+        # rough area average and should not be trusted without checking.
+        'elem_confirm': _elem_note(elem_source, elem, elem_best, elem_unrated),
         'mid': mid,
         'high': high,
         'top_school': top_school,

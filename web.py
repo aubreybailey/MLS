@@ -124,7 +124,7 @@ def create_map(df: pd.DataFrame) -> folium.Map:
         <b>${row["price"]:,}</b> | {row["beds"]}bd/{row["baths"]}ba | {row["sqft"] or "?"} sqft<br>
         <b>Schools:</b> Elem {row["elem"]}, Mid {row["mid"]}, High {row["high"]}<br>
         {f'Assigned elem: <b>{row["elem_school"]}</b><br>' if row.get("elem_school") else ''}
-        {f'<span style="color:#b26a00;">{row["elem_confirm"]} (area average, not the assigned school)</span><br>' if row.get("elem_confirm") else ''}
+        {f'<span style="color:#b26a00;">{row["elem_confirm"]}</span><br>' if row.get("elem_confirm") else ''}
         District: {row["district"]}{f' ({row["district_grades"]})' if row.get("district_grades") else ''}<br>
         {f'HS District: {row["district_hs"]} ({row["district_hs_grades"]})<br>' if row.get("district_hs") else ''}
         {f'<b style="color:red;">Flags: {row["flags"]}</b><br>' if row["flags"] else ''}
@@ -335,7 +335,7 @@ st.markdown("""
 st.subheader(f"Listings ({len(filtered)})")
 if len(filtered) > 0:
     cols = ['address', 'city', 'price', 'beds', 'baths', 'sqft',
-            'elem', 'elem_school', 'elem_confirm', 'mid', 'high',
+            'elem', 'elem_best', 'elem_school', 'elem_confirm', 'mid', 'high',
             'district', 'district_hs', 'flags', 'url']
     # Tolerate frames cached before district_hs existed.
     display_df = filtered[[c for c in cols if c in filtered.columns]].copy()
@@ -355,11 +355,17 @@ if len(filtered) > 0:
                 "Assigned Elem",
                 help="The elementary school this address is zoned for (NCES SABS "
                      "2015-16). Blank means this district didn't participate."),
+            "elem_best": st.column_config.NumberColumn(
+                "Best case", format="%.1f",
+                help="When the assigned school is unknown, the best-rated school in "
+                     "the district. Elem shows the worst. Blank means Elem is exact."),
             "elem_confirm": st.column_config.TextColumn(
-                "Verify?",
-                help="'*confirm elementary' means the Elem rating is a ~3mi area "
-                     "average, NOT the assigned school. Nearest-school guessing is "
-                     "wrong 44% of the time, so verify before relying on it."),
+                "Certainty",
+                help="Blank = Elem is the assigned school's own rating. "
+                     "'worst case' = assigned school unknown, so Elem is the LOWEST "
+                     "rated school in the district, i.e. a floor you can filter "
+                     "against safely. Nearest-school guessing is wrong 44% of the "
+                     "time, so we bound rather than guess."),
         },
         hide_index=True,
         width='stretch',

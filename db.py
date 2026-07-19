@@ -248,6 +248,29 @@ def schools_near(lat: float, lon: float, radius_miles: float = 5.0,
         return []
 
 
+def schools_in_district(leaid: str, level: str = None) -> list:
+    """Schools in one district with their ratings, for worst-case bounding.
+
+    When we can't determine the assigned school, every school in the district
+    is a candidate, so the minimum rating here is a floor the address cannot do
+    worse than. Rows with rating=None are returned too -- the caller needs to
+    know the bound is incomplete."""
+    try:
+        sql = ('SELECT s.ncessch, s.name, s.level, s.enrollment, r.rating '
+               'FROM schools s LEFT JOIN school_ratings r ON r.ncessch = s.ncessch '
+               'WHERE s.leaid = ?')
+        args = [leaid]
+        if level:
+            sql += ' AND s.level = ?'
+            args.append(level)
+        with _lock:
+            rows = _connect().execute(sql + ' ORDER BY s.name', args).fetchall()
+        keys = ('ncessch', 'name', 'level', 'enrollment', 'rating')
+        return [dict(zip(keys, r)) for r in rows]
+    except Exception:
+        return []
+
+
 def stats() -> dict:
     """Per-namespace counts and age range, for debugging."""
     try:

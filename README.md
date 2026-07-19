@@ -142,12 +142,29 @@ python scripts/build_attendance_zones.py --state MA   # downloads ~557MB
 docker compose run --rm geopackage                     # (districts, separate)
 ```
 
+**`elem` is never null and never optimistic.** When the assigned school is
+unknown, it reports the *worst* school in the district rather than an average or
+a guess, so `--min-elem 7` means "no school this address could be assigned to
+rates below 7" — a guarantee you can filter on. `elem_best` shows the other end
+of the range.
+
+| `elem_source` | `elem` is | Certainty |
+|---|---|---|
+| `zoned` | the assigned school's own rating | exact |
+| `district-sole` | the district's only school | exact |
+| `district-min` | the **lowest**-rated school in the district (`elem_best` = highest) | floor |
+| `zoned-unrated` | area average; school known but GreatSchools has no rating | unknown |
+| `area-avg` | ~3mi area average — last resort, not a bound | unreliable |
+
 | Column | Meaning |
 |---|---|
-| `elem_school` | The zoned elementary school. Blank = unknown. |
-| `elem` | That school's own rating when zoned; otherwise a ~3mi area average. |
-| `elem_source` | `zoned`, `zoned-unrated`, or `area-avg`. |
-| `elem_confirm` | `*confirm elementary` whenever `elem` is **not** the assigned school. |
+| `elem_school` | The assigned school. Blank when it can't be determined. |
+| `elem_best` | Best case when ambiguous; blank when `elem` is exact. |
+| `elem_confirm` | Plain-language caveat, empty when exact. |
+
+Note that `area-avg` is genuinely unreliable, not merely imprecise: a 3-mile
+radius pulls in *other districts'* schools. Northborough listings showed
+6.6–7.8 that way, below the true district floor of 7.0 — it wasn't even a bound.
 
 ### Schools table
 
