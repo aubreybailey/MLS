@@ -207,6 +207,7 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
 
     # Get school data
     district, district_grades = '', ''
+    district_hs, district_hs_grades = '', ''
     elem, mid, high = None, None, None
     top_school, top_rating = '', None
     school_count = 0
@@ -216,14 +217,23 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
             dr = lookup_coords(float(lat), float(lon))
             if dr and not dr.get('error'):
                 d = dr.get('school_districts', {})
+
+                def _fmt(info):
+                    return (info.get('name', ''),
+                            f"{info.get('low_grade', '?')}-{info.get('high_grade', '?')}")
+
+                # A point is served either by one unified district or by an
+                # elementary + secondary pair -- never both (verified: zero
+                # overlap across 166 sampled points in 26 states). Surface the
+                # secondary district separately so the high-school district
+                # isn't dropped, which it was for all 20 scsd states.
                 if 'unified' in d:
-                    dist_info = d['unified']
-                    district = dist_info.get('name', '')
-                    district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
-                elif 'elementary' in d:
-                    dist_info = d['elementary']
-                    district = dist_info.get('name', '')
-                    district_grades = f"{dist_info.get('low_grade', '?')}-{dist_info.get('high_grade', '?')}"
+                    district, district_grades = _fmt(d['unified'])
+                else:
+                    if 'elementary' in d:
+                        district, district_grades = _fmt(d['elementary'])
+                    if 'secondary' in d:
+                        district_hs, district_hs_grades = _fmt(d['secondary'])
         except Exception:
             pass
 
@@ -281,6 +291,8 @@ def _enrich_row(row, ratings_cache: dict, cache_lock: threading.Lock) -> dict:
         'flags': '|'.join(flags) if flags else '',
         'district': district,
         'district_grades': district_grades,
+        'district_hs': district_hs,
+        'district_hs_grades': district_hs_grades,
         'elem': elem,
         'mid': mid,
         'high': high,
@@ -486,6 +498,7 @@ def create_map(df: pd.DataFrame, title: str = "Rental Search") -> folium.Map:
             Middle: {row["mid"] or "N/A"}/10<br>
             High: {row["high"] or "N/A"}/10<br>
             {top_school_html}District: {row["district"] or "Unknown"} {f'({row["district_grades"]})' if row.get("district_grades") else ''}<br>
+            {f'HS District: {row["district_hs"]} ({row["district_hs_grades"]})<br>' if row.get("district_hs") else ''}
             {f'<hr style="margin: 5px 0;"><b style="color:red;">&#9888; {row["flags"]}</b><br>' if row["flags"] else ''}
             <hr style="margin: 5px 0;">
             <a href="{row["url"]}" target="_blank">View Listing</a>

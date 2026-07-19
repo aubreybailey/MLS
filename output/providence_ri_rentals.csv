@@ -1,6 +1,4 @@
-address,city,state,zip,price,beds,baths,sqft,lat,lon,url,flags,district,district_grades,elem,mid,high,top_school,top_rating,school_count
-55 Dorrance St,Providence,RI,02903,,,,,41.823837,-71.412155,https://www.realtor.com/rentals/details/55-Dorrance-St_Providence_RI_02903_M95292-55445,,Providence School District,PK-12,6.2,6.0,6.6,Classical High School,10.0,24
-0 Potters Ave Unit 1,Providence,RI,02905,900.0,1.0,1.0,,,,https://www.realtor.com/rentals/details/0-Potters-Ave-Unit-1_Providence_RI_02905_M98782-45350,UNIT|MULTI,,,,,,,,0
-79 Wendell St Apt 2,Providence,RI,02909,1850.0,2.0,1.0,1900.0,41.811134,-71.43438,https://www.realtor.com/rentals/details/79-Wendell-St-Apt-2_Providence_RI_02909_M95095-84711,UNIT,Providence School District,PK-12,6.2,6.3,6.6,Classical High School,10.0,24
-110 Benefit St,Providence,RI,02903,,,,,41.830401,-71.409136,https://www.realtor.com/rentals/details/110-Benefit-St_Providence_RI_02903_M97303-18351,,Providence School District,PK-12,6.3,6.5,6.7,Classical High School,10.0,24
-34 Benefit St,Providence,RI,02904,,,,,41.83292,-71.41004,https://www.realtor.com/rentals/details/34-Benefit-St_Providence_RI_02904_M96548-15550,,Providence School District,PK-12,6.3,6.5,6.7,Classical High School,10.0,24
+address,city,state,zip,price,beds,baths,sqft,lat,lon,url,flags,district,district_grades,district_hs,district_hs_grades,elem,mid,high,top_school,top_rating,school_count
+24 Congdon St,Providence,RI,02906,800,2,1,,41.82841,-71.407032,https://www.realtor.com/rentals/details/24-Congdon-St_Providence_RI_02906_M33115-90854,,Providence School District,PK-12,,,6.5,6.5,6.7,Classical High School,10,24
+524 Charles St Unit 2F,Providence,RI,02904,1695,2,1,1200.0,41.849423,-71.42002,https://www.realtor.com/rentals/details/524-Charles-St-2F_Providence_RI_02904_M33433-01753,UNIT,Providence School District,PK-12,,,6.5,6.8,6.4,Classical High School,10,23
+86 Appleton St Unit 3R,Providence,RI,02909,1300,2,1,648.0,41.820625,-71.444962,https://www.realtor.com/rentals/details/86-Appleton-St-Apt-3_Providence_RI_02909_M98133-44058,UNIT,Providence School District,PK-12,,,6.2,6.3,6.6,Classical High School,10,24
