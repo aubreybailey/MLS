@@ -360,8 +360,12 @@ if len(filtered) > 0:
     # the other two levels for context.
     _pfx = {'elementary': 'elem', 'middle': 'mid', 'high': 'high'}[school_level]
     _others = [p for p in ('elem', 'mid', 'high') if p != _pfx]
+    # The single rating shown for the filtered level is the worst case (the
+    # floor you filter on); the best case is redundant here since the Certainty
+    # column already carries the full "worst case (7.0-9.0)" range, and shown as
+    # its own column it misreads as the headline number. It stays in the CSV.
     cols = (['address', 'city', 'price', 'beds', 'baths', 'sqft',
-             _pfx, f'{_pfx}_best', f'{_pfx}_school', f'{_pfx}_confirm']
+             _pfx, f'{_pfx}_school', f'{_pfx}_confirm']
             + _others + ['district', 'district_hs', 'flags', 'url'])
     # Tolerate frames cached before district_hs existed.
     display_df = filtered[[c for c in cols if c in filtered.columns]].copy()
@@ -381,17 +385,14 @@ if len(filtered) > 0:
                 f"Assigned {school_level_label}",
                 help="The elementary school this address is zoned for (NCES SABS "
                      "2015-16). Blank means this district didn't participate."),
-            f"{_pfx}_best": st.column_config.NumberColumn(
-                "Best case", format="%.1f",
-                help="When the assigned school is unknown, the best-rated school in "
-                     "the district. Elem shows the worst. Blank means Elem is exact."),
             f"{_pfx}_confirm": st.column_config.TextColumn(
                 "Certainty",
-                help="Blank = Elem is the assigned school's own rating. "
-                     "'worst case' = assigned school unknown, so Elem is the LOWEST "
-                     "rated school in the district, i.e. a floor you can filter "
-                     "against safely. Nearest-school guessing is wrong 44% of the "
-                     "time, so we bound rather than guess."),
+                help="Blank = the rating is the assigned school's own. "
+                     "'worst case' = assigned school unknown, so the rating shown "
+                     "is the LOWEST-rated school in the district -- a floor you can "
+                     "filter against safely, with the full range in parentheses. "
+                     "Nearest-school guessing is wrong 44% of the time, so we bound "
+                     "rather than guess."),
         },
         hide_index=True,
         width='stretch',
