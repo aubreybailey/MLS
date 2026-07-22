@@ -168,13 +168,33 @@ def upsert_schools(rows: list) -> int:
         return 0
 
 
+# Rating sources, most trusted first. A lower-priority write never overwrites a
+# higher-priority one, so the CitySpire ~2020 seed can be layered underneath
+# without ever clobbering a fresh scrape or a hand-entered value, regardless of
+# the order scripts happen to run in.
+SOURCE_PRIORITY = {'manual': 3, 'greatschools': 2, 'cityspire-2020': 1}
+
+
+def _source_rank(source: str) -> int:
+    return SOURCE_PRIORITY.get(source, 2)   # unknown sources rank as a fresh scrape
+
+
 def put_school_rating(ncessch: str, rating, matched_name: str = '',
                       source: str = 'greatschools') -> None:
-    """Record a rating for one school. Never raises."""
+    """Record a rating for one school, respecting source precedence. Never raises.
+
+    A write is skipped when an equal-or-higher-priority rating already exists,
+    so seeding can't overwrite fresh data and re-running a scrape can't be
+    undone by a later seed pass."""
     try:
         now = datetime.now(timezone.utc).isoformat()
         with _lock:
             conn = _connect()
+            cur = conn.execute(
+                'SELECT source FROM school_ratings WHERE ncessch = ?', (ncessch,))
+            row = cur.fetchone()
+            if row is not None and _source_rank(row[0]) > _source_rank(source):
+                return                       # keep the higher-priority rating
             conn.execute(
                 'INSERT INTO school_ratings (ncessch, rating, matched_name, source, fetched_at) '
                 'VALUES (?, ?, ?, ?, ?) ON CONFLICT(ncessch) DO UPDATE SET '
