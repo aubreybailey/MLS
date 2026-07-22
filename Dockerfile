@@ -27,7 +27,9 @@ COPY download_data.sh .
 EXPOSE 8501
 
 # Health check for web server
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+# Use python, not curl: curl isn't installed in the conda image, so a curl-based
+# healthcheck reported "unhealthy" permanently even while the app served fine.
+HEALTHCHECK CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health',timeout=5).read()==b'ok' else 1)" || exit 1
 
 # Default: run web server
 ENV STREAMLIT_SERVER_HEADLESS=true

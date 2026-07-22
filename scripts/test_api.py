@@ -130,6 +130,44 @@ def test_pure(fails):
         fails.append(f"haversine Boston-Providence = {d}")
 
 
+def test_resolve_precedence(fails):
+    """The rating precedence in _resolve_level, deterministically. Stubs the one
+    db call so every branch runs without a built database -- notably
+    district-sole, which never fires against real MA data because every
+    single-school district there also has SABS coverage and takes the zoned
+    path first."""
+    orig = api.db.schools_in_district
+    try:
+        # district-sole: one school in the district -> exact, rating == best
+        api.db.schools_in_district = lambda leaid, level: [
+            {'name': 'Only School', 'rating': 6.0}]
+        r, best, school, source, unrated = api._resolve_level(
+            'elementary', {}, '9999999', {}, None)
+        if (source, r, best, school) != ('district-sole', 6.0, 6.0, 'Only School'):
+            fails.append(f"district-sole: {(source, r, best, school)}")
+
+        # district-min: several schools -> worst is the rating, best is the max
+        api.db.schools_in_district = lambda leaid, level: [
+            {'name': 'A', 'rating': 9.0}, {'name': 'B', 'rating': 7.0},
+            {'name': 'C', 'rating': None}]
+        r, best, school, source, unrated = api._resolve_level(
+            'elementary', {}, '9999999', {}, None)
+        if (source, r, best, unrated) != ('district-min', 7.0, 9.0, 1):
+            fails.append(f"district-min: {(source, r, best, unrated)}")
+
+        # area-avg: no zone, no district data -> falls through to the average,
+        # and it must be flagged as not a bound
+        api.db.schools_in_district = lambda leaid, level: []
+        r, best, school, source, unrated = api._resolve_level(
+            'elementary', {}, '', {}, 6.4)
+        if source != 'area-avg' or r != 6.4:
+            fails.append(f"area-avg: {(source, r)}")
+        if 'area average' not in api._source_note(source, r, best, unrated):
+            fails.append("area-avg note should warn it is not a bound")
+    finally:
+        api.db.schools_in_district = orig
+
+
 def test_db_backed(fails):
     if not os.path.exists(api.db.DB_PATH):
         print(f"  (skipping db-backed tests: {api.db.DB_PATH} not built)")
@@ -165,6 +203,7 @@ def test_db_backed(fails):
 def main():
     fails = []
     test_pure(fails)
+    test_resolve_precedence(fails)
     test_db_backed(fails)
     if fails:
         print(f"FAILED {len(fails)}")
