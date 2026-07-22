@@ -569,3 +569,13 @@ def enrich_listing(listing: dict, session: Session = None) -> dict:
 def get_stats() -> dict:
     """Cache/table statistics for the local store."""
     return db.stats()
+
+
+def get_city_coverage(state: str = None, complete_only: bool = False) -> list:
+    """City-sweep coverage rows: where our rating data is verifiably complete.
+
+    Each row is {state, city, total_listed, seen, matched, complete, swept_at}.
+    Sourced from the city_coverage table the sweep writes -- lets callers (and
+    an MCP client) ask 'is this town's roster fully covered?' without re-running
+    a scrape."""
+    return db.city_coverage(state, complete_only)

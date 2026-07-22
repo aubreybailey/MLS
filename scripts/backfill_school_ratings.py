@@ -161,7 +161,7 @@ def city_sweep(state: str, delay: float, verbose: bool = True) -> int:
             if verbose:
                 print(f"  [{i}/{len(cities)}] {city}: no city page")
             continue
-        got = 0
+        got = matched_here = 0
         for gs in r['schools']:
             if gs.get('rating') is None or gs.get('school_type') != 'public':
                 continue
@@ -175,6 +175,7 @@ def city_sweep(state: str, delay: float, verbose: bool = True) -> int:
             if not hit:
                 unmatched += 1
                 continue
+            matched_here += 1
             if db.get_school_rating(hit['ncessch']) is None:
                 db.put_school_rating(hit['ncessch'], gs['rating'], gs['name'])
                 rated += 1
@@ -182,6 +183,10 @@ def city_sweep(state: str, delay: float, verbose: bool = True) -> int:
         full = r['total'] is not None and len(r['schools']) >= r['total']
         complete += full
         incomplete += (not full)
+        # Persist what this city's sweep established, so "where is coverage
+        # verifiably complete?" is queryable rather than scrolling stdout.
+        db.record_city_coverage(state, city, r['total'], len(r['schools']),
+                                matched_here, full)
         if verbose:
             print(f"  [{i}/{len(cities)}] {city}: {len(r['schools'])}"
                   f"/{r['total']} listed, +{got} new ratings")

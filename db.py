@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS school_ratings (
     fetched_at TEXT,
     FOREIGN KEY (ncessch) REFERENCES schools(ncessch)
 );
+
+-- What the city-table sweep verified, per city. The sweep can tell whether it
+-- saw a city's whole roster (the page states a total), unlike the radius sweep
+-- which cannot. Persisting it answers "where is our coverage actually complete?"
+-- -- which is exactly what the attendance/rating gap analysis needs, instead of
+-- that signal being printed once and lost.
+CREATE TABLE IF NOT EXISTS city_coverage (
+    state       TEXT NOT NULL,
+    city        TEXT NOT NULL,
+    total_listed INTEGER,         -- schools GreatSchools claims for this city
+    seen        INTEGER,          -- rows we actually parsed
+    matched     INTEGER,          -- rows linked to an NCES school
+    complete    INTEGER,          -- 1 = we saw the full roster (seen >= total)
+    swept_at    TEXT,
+    PRIMARY KEY (state, city)
+);
 """
 
 # Ratings are published annually.
@@ -333,6 +349,48 @@ def schools_in_district(leaid: str, level: str = None) -> list:
             rows = _connect().execute(sql + ' ORDER BY s.name', args).fetchall()
         keys = ('ncessch', 'name', 'level', 'enrollment', 'rating')
         return [dict(zip(keys, r)) for r in rows]
+    except Exception:
+        return []
+
+
+def record_city_coverage(state: str, city: str, total_listed, seen: int,
+                         matched: int, complete: bool) -> None:
+    """Persist one city's sweep result. Never raises."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                'INSERT INTO city_coverage (state, city, total_listed, seen, '
+                'matched, complete, swept_at) VALUES (?, ?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(state, city) DO UPDATE SET '
+                'total_listed=excluded.total_listed, seen=excluded.seen, '
+                'matched=excluded.matched, complete=excluded.complete, '
+                'swept_at=excluded.swept_at',
+                (state.upper(), city, total_listed, seen, matched,
+                 1 if complete else 0, now),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def city_coverage(state: str = None, complete_only: bool = False) -> list:
+    """Read city_coverage rows, optionally filtered. Never raises."""
+    try:
+        sql = ('SELECT state, city, total_listed, seen, matched, complete, '
+               'swept_at FROM city_coverage')
+        clauses, args = [], []
+        if state:
+            clauses.append('state = ?'); args.append(state.upper())
+        if complete_only:
+            clauses.append('complete = 1')
+        if clauses:
+            sql += ' WHERE ' + ' AND '.join(clauses)
+        sql += ' ORDER BY state, city'
+        keys = ('state', 'city', 'total_listed', 'seen', 'matched', 'complete', 'swept_at')
+        with _lock:
+            return [dict(zip(keys, r)) for r in _connect().execute(sql, args)]
     except Exception:
         return []
 
