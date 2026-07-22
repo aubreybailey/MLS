@@ -7,6 +7,7 @@ Fetches school ratings from GreatSchools.org search results.
 
 import json
 import re
+import time
 import requests
 from dataclasses import dataclass
 from typing import Optional
@@ -253,3 +254,124 @@ def get_ratings_by_level(lat: float, lon: float, radius: int = 3) -> dict:
             }
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# City-table enumeration
+#
+# Borrowed from the CitySpire project's approach (labspt15-cityspire-g-ds),
+# with two upgrades: no selenium (plain requests works against this endpoint
+# now), and the embedded "schools" JSON instead of scraping the HTML table.
+#
+# Why this exists alongside the lat/lon radius search: the city table is a
+# COMPLETE enumeration with a stated total ("Showing 1 to 17 of 17"), so
+# coverage is verifiable per city -- a radius sweep can never prove it saw
+# everything. Each row also carries lat/lon, street address and districtName,
+# which are far stronger matching signals than a bare name.
+
+STATE_NAMES = {
+    'AL': 'alabama', 'AK': 'alaska', 'AZ': 'arizona', 'AR': 'arkansas',
+    'CA': 'california', 'CO': 'colorado', 'CT': 'connecticut',
+    'DE': 'delaware', 'DC': 'district-of-columbia', 'FL': 'florida',
+    'GA': 'georgia', 'HI': 'hawaii', 'ID': 'idaho', 'IL': 'illinois',
+    'IN': 'indiana', 'IA': 'iowa', 'KS': 'kansas', 'KY': 'kentucky',
+    'LA': 'louisiana', 'ME': 'maine', 'MD': 'maryland',
+    'MA': 'massachusetts', 'MI': 'michigan', 'MN': 'minnesota',
+    'MS': 'mississippi', 'MO': 'missouri', 'MT': 'montana',
+    'NE': 'nebraska', 'NV': 'nevada', 'NH': 'new-hampshire',
+    'NJ': 'new-jersey', 'NM': 'new-mexico', 'NY': 'new-york',
+    'NC': 'north-carolina', 'ND': 'north-dakota', 'OH': 'ohio',
+    'OK': 'oklahoma', 'OR': 'oregon', 'PA': 'pennsylvania',
+    'RI': 'rhode-island', 'SC': 'south-carolina', 'SD': 'south-dakota',
+    'TN': 'tennessee', 'TX': 'texas', 'UT': 'utah', 'VT': 'vermont',
+    'VA': 'virginia', 'WA': 'washington', 'WV': 'west-virginia',
+    'WI': 'wisconsin', 'WY': 'wyoming',
+}
+
+
+def _parse_school_objects(html: str) -> list[dict]:
+    """Full school dicts from the embedded "schools" JSON array."""
+    m = re.search(r'"schools":\s*\[', html)
+    if not m:
+        return []
+    out, depth, start = [], 0, None
+    for j in range(m.end(), len(html)):
+        c = html[j]
+        if c == '{':
+            if depth == 0:
+                start = j
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    out.append(json.loads(html[start:j + 1]))
+                except Exception:
+                    pass
+        elif c == ']' and depth == 0:
+            break
+    return out
+
+
+def get_city_schools(state_abbr: str, city: str, verbose: bool = False) -> dict:
+    """Every school GreatSchools lists for one city, with a verifiable total.
+
+    Returns {'total': int|None, 'schools': [...]} where each school keeps the
+    fields that matter for matching: name, rating, gradeLevels, levelCode,
+    lat, lon, address, districtName, schoolType, enrollment.
+    total is what the page claims exists; len(schools) < total means the sweep
+    is knowingly incomplete (unlike the radius search, which cannot know).
+    """
+    state = STATE_NAMES.get(state_abbr.upper())
+    if not state:
+        return {'total': None, 'schools': []}
+    slug = city.strip().lower().replace(' ', '-')
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+    }
+
+    schools, seen, total = [], set(), None
+    for page in range(1, 40):
+        url = (f'https://www.greatschools.org/{state}/{slug}/schools/'
+               f'?page={page}&tableView=Overview&view=table')
+        try:
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT,
+                                allow_redirects=True)
+            if resp.status_code != 200:
+                break
+            html = resp.text
+        except Exception:
+            break
+
+        m = re.search(r'[Ss]howing\s+(\d+)\s+to\s+(\d+)\s+of\s+(\d+)', html)
+        batch = _parse_school_objects(html)
+        new = 0
+        for d in batch:
+            key = (d.get('name'), (d.get('address') or {}).get('street1'))
+            if key in seen:
+                continue
+            seen.add(key)
+            schools.append({
+                'name': _unescape(str(d.get('name') or '')),
+                'rating': d.get('rating'),
+                'grades': d.get('gradeLevels') or '',
+                'level_code': d.get('levelCode') or '',
+                'lat': d.get('lat'), 'lon': d.get('lon'),
+                'street': ((d.get('address') or {}).get('street1')) or '',
+                'district_name': _unescape(str(d.get('districtName') or '')),
+                'school_type': d.get('schoolType') or '',
+                'enrollment': d.get('enrollment'),
+            })
+            new += 1
+        if verbose:
+            print(f'    page {page}: +{new}')
+        if m:
+            total = int(m.group(3))
+            if int(m.group(2)) >= total:
+                break
+        if not batch or new == 0:
+            break
+        time.sleep(0.4)
+
+    return {'total': total, 'schools': schools}

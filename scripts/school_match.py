@@ -202,3 +202,42 @@ def match_by_distinctive_token(gs_name: str, candidates: list,
     top = max(s for s, _ in scored)
     best = [c for s, c in scored if s == top]
     return best[0] if len(best) == 1 else None
+
+
+def match_school_geo(gs_lat, gs_lon, gs_grades: str, candidates: list,
+                     max_miles: float = 0.15, isolation: float = 2.0):
+    """Match a school by where its building is.
+
+    The city-table scrape supplies per-school coordinates, and NCES has them
+    too; two records within ~250m are almost certainly the same school. This
+    outranks name matching -- coordinates don't get abbreviated or renamed.
+
+    Candidates must carry 'lat'/'lon' and (ideally) a computed 'distance_mi'
+    from db.schools_near. Requires the closest grade-compatible candidate to be
+    inside max_miles AND clearly isolated (next candidate at least `isolation`x
+    farther), because co-located campuses (a K-2 / 3-5 pair sharing a site) are
+    the one place coordinates lie. Falls back to None -- callers then try the
+    name tiers.
+    """
+    import math
+    if gs_lat is None or gs_lon is None:
+        return None
+
+    def dist(c):
+        if c.get('distance_mi') is not None:
+            return c['distance_mi']
+        R = 3958.8
+        la1, lo1, la2, lo2 = map(math.radians, (gs_lat, gs_lon, c['lat'], c['lon']))
+        x = (math.sin((la2 - la1) / 2) ** 2
+             + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2)
+        return R * 2 * math.asin(math.sqrt(x))
+
+    scored = sorted(
+        ((dist(c), c) for c in candidates
+         if c.get('lat') is not None and grades_compatible(gs_grades, c)),
+        key=lambda t: t[0])
+    if not scored or scored[0][0] > max_miles:
+        return None
+    if len(scored) > 1 and scored[1][0] < scored[0][0] * isolation:
+        return None            # two plausible buildings too close together
+    return scored[0][1]

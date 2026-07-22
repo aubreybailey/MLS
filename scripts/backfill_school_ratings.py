@@ -27,8 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db
-from greatschools_scraper import get_ratings_by_level
-from school_match import best_match, match_by_distinctive_token
+from greatschools_scraper import get_ratings_by_level, get_city_schools
+from school_match import best_match, match_by_distinctive_token, match_school_geo
 
 
 def geocode(location: str):
@@ -128,10 +128,78 @@ def backfill_state(state: str, level: str, delay: float, max_queries: int,
     return 0
 
 
+
+
+def city_sweep(state: str, delay: float, verbose: bool = True) -> int:
+    """Enumerate GreatSchools city tables for every city we have schools in.
+
+    Approach borrowed from the CitySpire project (labspt15-cityspire-g-ds),
+    minus its selenium dependency. Two properties the radius sweep lacks:
+
+      * Completeness is verifiable -- each city page states a total, so we can
+        report exactly which cities we fully covered.
+      * Each row carries coordinates, so matching is building-location first
+        (match_school_geo), with the name tiers as fallback. Coordinates don't
+        get abbreviated, renamed, or shared between neighbouring towns.
+    """
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    cities = [r[0] for r in conn.execute(
+        """SELECT DISTINCT s.city FROM schools s
+           LEFT JOIN school_ratings r ON r.ncessch = s.ncessch
+           WHERE s.state = ? AND s.city != '' AND r.rating IS NULL
+           ORDER BY s.city""", (state,))]
+    conn.close()
+    print(f"{len(cities)} cities in {state} still have >=1 unrated school.")
+
+    rated = unmatched = pages_missing = 0
+    complete = incomplete = 0
+    for i, city in enumerate(cities, 1):
+        r = get_city_schools(state, city)
+        if r['total'] is None and not r['schools']:
+            pages_missing += 1
+            if verbose:
+                print(f"  [{i}/{len(cities)}] {city}: no city page")
+            continue
+        got = 0
+        for gs in r['schools']:
+            if gs.get('rating') is None or gs.get('school_type') != 'public':
+                continue
+            cands = db.schools_near(gs['lat'], gs['lon'], 1.0, None, 50) \
+                if gs.get('lat') else []
+            hit = (match_school_geo(gs.get('lat'), gs.get('lon'),
+                                    gs.get('grades', ''), cands)
+                   or best_match(gs['name'], cands, gs_grades=gs.get('grades', ''))
+                   or match_by_distinctive_token(gs['name'], cands,
+                                                 gs_grades=gs.get('grades', '')))
+            if not hit:
+                unmatched += 1
+                continue
+            if db.get_school_rating(hit['ncessch']) is None:
+                db.put_school_rating(hit['ncessch'], gs['rating'], gs['name'])
+                rated += 1
+                got += 1
+        full = r['total'] is not None and len(r['schools']) >= r['total']
+        complete += full
+        incomplete += (not full)
+        if verbose:
+            print(f"  [{i}/{len(cities)}] {city}: {len(r['schools'])}"
+                  f"/{r['total']} listed, +{got} new ratings")
+        time.sleep(delay)
+
+    print(f"\ncities swept: {len(cities)} ({complete} verifiably complete, "
+          f"{incomplete} partial, {pages_missing} without a city page)")
+    print(f"newly rated: {rated}   unmatched: {unmatched}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--state', help='backfill a whole state, e.g. MA')
+    ap.add_argument('--city-sweep', metavar='STATE',
+                    help='enumerate GreatSchools city tables (verifiable totals, '
+                         'coordinate matching) for every city with unrated schools')
     ap.add_argument('--delay', type=float, default=0.6,
                     help='seconds between GreatSchools queries (default 0.6)')
     ap.add_argument('--max-queries', type=int, default=2000,
@@ -144,6 +212,9 @@ def main():
     ap.add_argument('--level', help='elementary | middle | high')
     ap.add_argument('--refresh', action='store_true', help='re-fetch schools already rated')
     args = ap.parse_args()
+
+    if args.city_sweep:
+        return city_sweep(args.city_sweep.upper(), args.delay)
 
     if args.state:
         return backfill_state(args.state.upper(), args.level, args.delay,
