@@ -83,6 +83,25 @@ CREATE TABLE IF NOT EXISTS school_ratings (
     FOREIGN KEY (ncessch) REFERENCES schools(ncessch)
 );
 
+-- Attendance-zone assignment sampled per point from GreatSchools' "Schools by
+-- Address" oracle (which carries current licensed zone data SABS lacks). Each
+-- row is one lat/lon we asked about and the school it's assigned to. A listing
+-- in an unzoned district resolves to its nearest sample -- a labeled point
+-- cloud, which refines as more points are added, without fragile polygon
+-- reconstruction. Keyed by rounded coords so re-sampling a point updates it.
+CREATE TABLE IF NOT EXISTS zone_samples (
+    lat        REAL NOT NULL,
+    lon        REAL NOT NULL,
+    ncessch    TEXT,             -- assigned school, matched to NCES (NULL if unmatched)
+    school_name TEXT,            -- as GreatSchools labeled it
+    district   TEXT,            -- "Assigned school in <district>"
+    state      TEXT,
+    source     TEXT DEFAULT 'greatschools-assigned',
+    fetched_at TEXT,
+    PRIMARY KEY (lat, lon)
+);
+CREATE INDEX IF NOT EXISTS zone_samples_geo ON zone_samples(lat, lon);
+
 -- What the city-table sweep verified, per city. The sweep can tell whether it
 -- saw a city's whole roster (the page states a total), unlike the radius sweep
 -- which cannot. Persisting it answers "where is our coverage actually complete?"
@@ -351,6 +370,61 @@ def schools_in_district(leaid: str, level: str = None) -> list:
         return [dict(zip(keys, r)) for r in rows]
     except Exception:
         return []
+
+
+def put_zone_sample(lat: float, lon: float, ncessch, school_name: str,
+                    district: str, state: str,
+                    source: str = 'greatschools-assigned') -> None:
+    """Store one sampled point->assigned-school. Never raises."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                'INSERT INTO zone_samples (lat, lon, ncessch, school_name, '
+                'district, state, source, fetched_at) VALUES (?,?,?,?,?,?,?,?) '
+                'ON CONFLICT(lat, lon) DO UPDATE SET ncessch=excluded.ncessch, '
+                'school_name=excluded.school_name, district=excluded.district, '
+                'source=excluded.source, fetched_at=excluded.fetched_at',
+                (round(lat, 5), round(lon, 5), ncessch, school_name, district,
+                 (state or '').upper(), source, now),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def nearest_zone_sample(lat: float, lon: float, max_miles: float = 0.6):
+    """Assigned school for the nearest sampled point within max_miles, or None.
+
+    A bounded nearest-neighbour classifier over the labeled point cloud: close
+    enough to a known point, an address is almost certainly in the same zone.
+    Returns {'ncessch','school_name','district','distance_mi'} or None."""
+    import math
+    try:
+        # Cheap bounding box first, then exact haversine on the survivors.
+        dlat = max_miles / 69.0
+        dlon = max_miles / max(0.1, 69.0 * math.cos(math.radians(lat)))
+        with _lock:
+            rows = _connect().execute(
+                'SELECT lat, lon, ncessch, school_name, district FROM zone_samples '
+                'WHERE ncessch IS NOT NULL AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?',
+                (lat - dlat, lat + dlat, lon - dlon, lon + dlon)).fetchall()
+        best, best_d = None, max_miles
+        for la, lo, nc, nm, dist in rows:
+            R = 3958.8
+            x = (math.sin(math.radians(la - lat) / 2) ** 2
+                 + math.cos(math.radians(lat)) * math.cos(math.radians(la))
+                 * math.sin(math.radians(lo - lon) / 2) ** 2)
+            d = R * 2 * math.asin(math.sqrt(x))
+            if d <= best_d:
+                best, best_d = (nc, nm, dist), d
+        if best is None:
+            return None
+        return {'ncessch': best[0], 'school_name': best[1],
+                'district': best[2], 'distance_mi': round(best_d, 3)}
+    except Exception:
+        return None
 
 
 def record_city_coverage(state: str, city: str, total_listed, seen: int,

@@ -327,18 +327,20 @@ def _rating_for_school(name: str, ncessch: str, ratings: dict):
 
 
 def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
-                   area_avg):
+                   area_avg, lat: float = None, lon: float = None):
     """Best available rating for one school level at one address.
 
     Returns (rating, best_case, school_name, source, unrated_count).
 
     Same precedence at every level, so a filter means the same thing whichever
     one the user picks:
-      zoned         the address's assigned school, exactly
-      district-sole the district has one school at this level, so no ambiguity
-      district-min  worst school in the district -- a floor, not a guess
-      area-avg      last resort ~3mi average; NOT a bound, since the radius
-                    crosses district lines
+      zoned          the address's assigned school (SABS), exactly
+      zoned-inferred assigned school from a nearby sampled GreatSchools point,
+                     for districts SABS never covered (scripts/sample_zones)
+      district-sole  the district has one school at this level, so no ambiguity
+      district-min   worst school in the district -- a floor, not a guess
+      area-avg       last resort ~3mi average; NOT a bound, since the radius
+                     crosses district lines
     """
     school, source, best, unrated = '', 'area-avg', None, 0
     rating = area_avg
@@ -351,6 +353,16 @@ def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
         if assigned is not None:
             return assigned, None, school, 'zoned', 0
         source = 'zoned-unrated'
+
+    # No SABS zone: fall back to a nearby sampled assignment before the floor.
+    # Sampled points currently exist only for elementary.
+    if source != 'zoned-unrated' and level == 'elementary' \
+            and lat is not None and lon is not None:
+        s = db.nearest_zone_sample(lat, lon)
+        if s and s.get('ncessch'):
+            r = db.get_school_rating(s['ncessch'])
+            if r is not None:
+                return r, None, s.get('school_name', ''), 'zoned-inferred', 0
 
     if leaid:
         cands = db.schools_in_district(leaid, level)
@@ -374,6 +386,8 @@ def _source_note(source: str, worst, best, unrated: int) -> str:
         if unrated:
             return note + f", {unrated} unrated"
         return note
+    if source == 'zoned-inferred':
+        return 'assigned school (inferred from a nearby sampled point, not SABS)'
     if source == 'zoned-unrated':
         return 'school known, no rating available'
     return '*confirm elementary - area average only'
@@ -408,7 +422,7 @@ def resolve_school(lat: float, lon: float, level: str, zones: dict = None,
 
     area_avg = (area.get(level) or {}).get('rating')
     rating, best, school, source, unrated = _resolve_level(
-        level, zones, leaid, area, area_avg)
+        level, zones, leaid, area, area_avg, lat, lon)
     return {'level': level, 'rating': rating, 'best_case': best,
             'school': school, 'source': source, 'unrated': unrated,
             'note': _source_note(source, rating, best, unrated)}
@@ -505,7 +519,7 @@ def enrich_listing(listing: dict, session: Session = None) -> dict:
             zones = z.get('zones') or {} if z.get('status') == 'assigned' else {}
 
             elem, elem_best, elem_school, elem_source, elem_unrated = _resolve_level(
-                'elementary', zones, elem_leaid, r, elem)
+                'elementary', zones, elem_leaid, r, elem, float(lat), float(lon))
             mid, mid_best, mid_school, mid_source, mid_unrated = _resolve_level(
                 'middle', zones, elem_leaid, r, mid)
             # High school often sits in a separate secondary district; fall back
