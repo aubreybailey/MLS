@@ -375,3 +375,26 @@ def get_city_schools(state_abbr: str, city: str, verbose: bool = False) -> dict:
         time.sleep(0.4)
 
     return {'total': total, 'schools': schools}
+
+
+def parse_assigned_school(page_text: str):
+    """Extract the assigned school from GreatSchools' "Schools by Address" page.
+
+    The page (rendered by a real browser -- curl gets no assignment) lists
+    schools by distance; the one the address is *assigned* to has a line
+    "Assigned school in <district>" right after its block. Each school block is
+    "<name>\\n<rating>\\n/10\\nGreatSchools Rating ...", so the assigned school is
+    the last such block before the marker -- correct regardless of sort order.
+
+    Returns (school_name, district) or (None, None). Deterministic: no judgment
+    for a caller (or a small model) to get wrong.
+    """
+    m = re.search(r'Assigned school in ([^\n]+)', page_text)
+    if not m:
+        return None, None
+    district = m.group(1).strip()
+    before = page_text[:m.start()]
+    entries = re.findall(r'([^\n]+?)\n\d+\n/10\nGreatSchools Rating', before)
+    if not entries:
+        return None, district
+    return entries[-1].strip(), district
