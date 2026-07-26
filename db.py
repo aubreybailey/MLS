@@ -102,6 +102,26 @@ CREATE TABLE IF NOT EXISTS zone_samples (
 );
 CREATE INDEX IF NOT EXISTS zone_samples_geo ON zone_samples(lat, lon);
 
+-- Per-district metadata, keyed by the NCES leaid (= TIGER district GEOID).
+-- zoning_style is how a district decides which school an address attends -- the
+-- distinction that determines whether zone SAMPLING even works:
+--   zoned   geographic attendance zones (Northborough, Concord, Natick) -> sample
+--   choice  no geographic zones; lottery / district assignment (Boston, Acton-
+--           Boxborough) -> DON'T sample, and label listings honestly, because a
+--           sampled point would pin every address to one arbitrary school
+--   single  one school at a level -> assignment is trivial
+--   unknown not yet determined
+-- Recording it stops us re-sampling a choice district and lets enrichment say
+-- "district uses school choice" instead of implying a zone.
+CREATE TABLE IF NOT EXISTS districts (
+    leaid        TEXT PRIMARY KEY,
+    name         TEXT,
+    state        TEXT,
+    zoning_style TEXT DEFAULT 'unknown',
+    checked_at   TEXT,
+    note         TEXT
+);
+
 -- What the city-table sweep verified, per city. The sweep can tell whether it
 -- saw a city's whole roster (the page states a total), unlike the radius sweep
 -- which cannot. Persisting it answers "where is our coverage actually complete?"
@@ -425,6 +445,44 @@ def nearest_zone_sample(lat: float, lon: float, max_miles: float = 0.6):
                 'district': best[2], 'distance_mi': round(best_d, 3)}
     except Exception:
         return None
+
+
+VALID_ZONING = ('zoned', 'choice', 'single', 'unknown')
+
+
+def set_district_zoning(leaid: str, zoning_style: str, name: str = None,
+                        state: str = None, note: str = None) -> None:
+    """Record how a district assigns schools. Never raises. name/state/note only
+    overwrite when provided, so a later zoning update doesn't blank them."""
+    if zoning_style not in VALID_ZONING:
+        return
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                'INSERT INTO districts (leaid, name, state, zoning_style, checked_at, note) '
+                'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(leaid) DO UPDATE SET '
+                'zoning_style=excluded.zoning_style, checked_at=excluded.checked_at, '
+                'name=COALESCE(excluded.name, districts.name), '
+                'state=COALESCE(excluded.state, districts.state), '
+                'note=COALESCE(excluded.note, districts.note)',
+                (leaid, name, (state or '').upper() or None, zoning_style, now, note),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def get_district_zoning(leaid: str) -> str:
+    """Return a district's zoning_style, or 'unknown' if not recorded."""
+    try:
+        with _lock:
+            row = _connect().execute(
+                'SELECT zoning_style FROM districts WHERE leaid = ?', (leaid,)).fetchone()
+        return row[0] if row else 'unknown'
+    except Exception:
+        return 'unknown'
 
 
 def record_city_coverage(state: str, city: str, total_listed, seen: int,

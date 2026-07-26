@@ -354,9 +354,14 @@ def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
             return assigned, None, school, 'zoned', 0
         source = 'zoned-unrated'
 
+    # A choice/lottery district (Boston, Acton-Boxborough) has no geographic
+    # zone, so a nearby sample would pin the address to one arbitrary school.
+    # Skip the sample tier there and report the floor as a genuine bound.
+    zoning = db.get_district_zoning(leaid) if leaid else 'unknown'
+
     # No SABS zone: fall back to a nearby sampled assignment before the floor.
     # Sampled points currently exist only for elementary.
-    if source != 'zoned-unrated' and level == 'elementary' \
+    if source != 'zoned-unrated' and level == 'elementary' and zoning != 'choice' \
             and lat is not None and lon is not None:
         s = db.nearest_zone_sample(lat, lon)
         if s and s.get('ncessch'):
@@ -371,8 +376,12 @@ def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
             worst = min(c['rating'] for c in rated)
             if len(cands) == 1:
                 return worst, worst, cands[0]['name'], 'district-sole', 0
+            # In a choice district every school is genuinely reachable from any
+            # address, so the worst is a true floor -- label it as choice so the
+            # note explains why, rather than implying an undiscovered zone.
+            src = 'district-choice' if zoning == 'choice' else 'district-min'
             return (worst, max(c['rating'] for c in rated), school,
-                    'district-min', len(cands) - len(rated))
+                    src, len(cands) - len(rated))
     return rating, best, school, source, unrated
 
 
@@ -386,6 +395,9 @@ def _source_note(source: str, worst, best, unrated: int) -> str:
         if unrated:
             return note + f", {unrated} unrated"
         return note
+    if source == 'district-choice':
+        rng = f"{worst}-{best}" if best is not None and best != worst else f"{worst}"
+        return f"school-choice district - any school possible; worst ({rng}) shown"
     if source == 'zoned-inferred':
         return 'assigned school (inferred from a nearby sampled point, not SABS)'
     if source == 'zoned-unrated':
