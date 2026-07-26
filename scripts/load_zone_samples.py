@@ -43,13 +43,17 @@ def _match_ncessch(school_name, lat, lon):
     school's district, so this is a small, correct candidate set -- matching
     'Lincoln Street' against all of MA would hit unrelated Lincoln schools and
     (rightly) refuse."""
-    # 8mi (not 4): a midpoint-between-schools sample can sit that far from the
-    # assigned school in a large regional district, and the geographic scope is
-    # still tight enough that the name match stays unambiguous.
-    cands = db.schools_near(lat, lon, 8.0, 'elementary', 100)
-    hit = (best_match(school_name, cands) or
-           match_by_distinctive_token(school_name, cands))
-    return hit['ncessch'] if hit else None
+    # Two passes: a tight 4mi candidate set first (unambiguous for most points),
+    # then widen to 8mi only if that found nothing -- a midpoint-between-schools
+    # sample can sit ~5mi from the assigned school in a large regional district.
+    # Widening everything instead would pull in extra same-named candidates and
+    # make best_match refuse, so the fallback is deliberately last-resort.
+    for radius in (4.0, 8.0):
+        cands = db.schools_near(lat, lon, radius, 'elementary', 100)
+        hit = best_match(school_name, cands) or match_by_distinctive_token(school_name, cands)
+        if hit:
+            return hit['ncessch']
+    return None
 
 
 def main():
