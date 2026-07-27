@@ -165,6 +165,7 @@ PROVENANCE = {
     'computed-single':         'inferred',    # districts: only 1 school at this level
     'computed-sampled':        'inferred',    # districts: zone sampling found multiple schools
     'computed-count':          'inferred',    # districts: school count, not yet sampled
+    'not-rated-pk':            'inferred',    # school_ratings: grade range below testing (PK/K-2)
 
     # Human-verified (never expires, never auto-overwritten)
     'manual':                  'manual',      # school_ratings: hand-entered rating
@@ -261,7 +262,7 @@ def upsert_schools(rows: list) -> int:
 # higher-priority one, so the CitySpire ~2020 seed can be layered underneath
 # without ever clobbering a fresh scrape or a hand-entered value, regardless of
 # the order scripts happen to run in.
-SOURCE_PRIORITY = {'manual': 3, 'greatschools': 2, 'cityspire-2020': 1}
+SOURCE_PRIORITY = {'manual': 3, 'not-rated-pk': 3, 'greatschools': 2, 'cityspire-2020': 1}
 
 
 def _source_rank(source: str) -> int:
@@ -299,7 +300,10 @@ def put_school_rating(ncessch: str, rating, matched_name: str = '',
 def _rating_is_fresh(rating, fetched_at, source,
                      max_age_days: int = RATING_TTL_DAYS) -> bool:
     """Is a stored rating still usable? Hand-entered rows (source='manual')
-    never expire -- you entered them deliberately."""
+    never expire -- you entered them deliberately. 'not-rated-pk' rows are
+    intentionally NULL (school below testing grades) and also never expire."""
+    if source == 'not-rated-pk':
+        return True
     if rating is None:
         return False
     if source != 'manual' and fetched_at:

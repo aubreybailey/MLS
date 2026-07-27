@@ -22,6 +22,9 @@ Steps
   3. zones        NCES SABS attendance boundaries       -> data/attendance_zones.gpkg
   4. schools      NCES CCD school directory             -> cache/schools.db
   5. ratings      GreatSchools ratings per school       -> cache/schools.db
+                  (also tags PK/K-2 schools as not-rated-pk)
+  6. samples      load committed zone-sample seed       -> cache/schools.db
+  7. classify     district zoning style classification  -> cache/schools.db
 
 Usage
     python scripts/setup_state.py --state MA
@@ -40,7 +43,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, 'data')
 
-STEPS = ('boundaries', 'geopackage', 'zones', 'schools', 'ratings')
+STEPS = ('boundaries', 'geopackage', 'zones', 'schools', 'ratings',
+         'samples', 'classify')
 
 
 def run(cmd, dry_run=False) -> int:
@@ -97,7 +101,49 @@ def step_ratings(state, args):
            '--state', state, '--delay', str(args.delay)]
     if args.level:
         cmd += ['--level', args.level]
-    return run(cmd, args.dry_run)
+    rc = run(cmd, args.dry_run)
+    if not args.dry_run:
+        _tag_pk_schools(state)
+    return rc
+
+
+def _tag_pk_schools(state):
+    """Tag schools whose grade range is below state-testing grades (PK/K-2) as
+    'not-rated-pk'. GreatSchools structurally cannot rate these, so the absence
+    is explained — not a gap."""
+    sys.path.insert(0, ROOT)
+    import db
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    unrated_pk = conn.execute(
+        'SELECT s.ncessch, s.grade_hi FROM schools s '
+        'LEFT JOIN school_ratings r ON s.ncessch = r.ncessch '
+        'WHERE s.state = ? AND s.level = "elementary" AND s.grade_hi < 3 '
+        'AND r.ncessch IS NULL', (state,)).fetchall()
+    if not unrated_pk:
+        return
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    for nc, ghi in unrated_pk:
+        db.put_school_rating(nc, None, f'grades end at {ghi}, below testing',
+                             source='not-rated-pk')
+    print(f"  tagged {len(unrated_pk)} PK/K-2 schools as not-rated-pk")
+
+
+def step_samples(state, args):
+    """Load committed zone-sample seed into the zone_samples table."""
+    csv_path = os.path.join(HERE, 'data', 'zone_samples.csv')
+    if not os.path.exists(csv_path):
+        print(f"  no zone samples seed at {csv_path} (optional)")
+        return 0
+    return run([sys.executable, os.path.join(HERE, 'load_zone_samples.py')],
+               args.dry_run)
+
+
+def step_classify(state, args):
+    """Classify district zoning style (zoned/choice/single/unknown)."""
+    return run([sys.executable, os.path.join(HERE, 'classify_districts.py'),
+                '--state', state], args.dry_run)
 
 
 HANDLERS = {
@@ -106,6 +152,8 @@ HANDLERS = {
     'zones': step_zones,
     'schools': step_schools,
     'ratings': step_ratings,
+    'samples': step_samples,
+    'classify': step_classify,
 }
 
 
@@ -134,9 +182,19 @@ def verify(state):
         if n:
             rated = q("""SELECT COUNT(*) FROM schools s JOIN school_ratings r
                          ON r.ncessch = s.ncessch
-                         WHERE s.state = ? AND s.level = 'elementary'""", (state,))
+                         WHERE s.state = ? AND s.level = 'elementary'
+                         AND r.rating IS NOT NULL""", (state,))
+            pk = q("""SELECT COUNT(*) FROM schools s JOIN school_ratings r
+                      ON r.ncessch = s.ncessch
+                      WHERE s.state = ? AND s.level = 'elementary'
+                      AND r.source = 'not-rated-pk'""", (state,))
             tot = q("SELECT COUNT(*) FROM schools WHERE state = ? AND level = 'elementary'", (state,))
+            gap = tot - rated - pk
             print(f"  elementary rated       {rated}/{tot} ({rated / tot * 100:.0f}%)" if tot else "")
+            if pk:
+                print(f"  PK/K-2 (no testing)   {pk}  (tagged, not a gap)")
+            if gap:
+                print(f"  truly unrated         {gap}")
             full = q("""SELECT COUNT(*) FROM (
                           SELECT s.leaid FROM schools s
                           LEFT JOIN school_ratings r ON r.ncessch = s.ncessch
