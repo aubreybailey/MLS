@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import sqlite3
 import sys
@@ -27,11 +28,22 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db
 
+def _haversine(lat1, lon1, lat2, lon2):
+    R = 3959
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dlon/2)**2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
 # Districts confirmed to assign non-geographically (verified: distant points all
 # return one school). Keyed by NCES leaid.
 KNOWN_CHOICE = {
     '2502790': 'Boston (home-based assignment lottery)',
     '2501710': 'Acton-Boxborough (regional, non-geographic elementary assignment)',
+    '2505070': 'Freetown-Lakeville (same assigned school at distant points)',
 }
 
 
@@ -82,6 +94,13 @@ def main():
             "SELECT s.leaid, z.ncessch FROM zone_samples z "
             "JOIN schools s ON s.ncessch = z.ncessch WHERE z.ncessch IS NOT NULL"):
         sampled.setdefault(leaid, set()).add(nc)
+
+    # school locations for geographic-spread fallback
+    school_locs = {}
+    for leaid, lat, lon in conn.execute(
+            "SELECT leaid, lat, lon FROM schools WHERE state = ? AND level = 'elementary'",
+            (state,)):
+        school_locs.setdefault(leaid, []).append((lat, lon))
     conn.close()
 
     tally = {}
@@ -96,6 +115,13 @@ def main():
             style, src, note = 'zoned', 'sabs', 'SABS attendance boundaries'
         elif len(sampled.get(leaid, ())) >= 2:
             style, src, note = 'zoned', 'computed-sampled', 'sampled: multiple assigned schools'
+        elif len(school_locs.get(leaid, [])) >= 2:
+            locs = school_locs[leaid]
+            max_d = max(
+                _haversine(locs[i][0], locs[i][1], locs[j][0], locs[j][1])
+                for i in range(len(locs)) for j in range(i+1, len(locs)))
+            style = 'zoned'
+            src, note = 'computed-spread', f'geographic spread {max_d:.1f}mi across {len(locs)} schools'
         else:
             style, src, note = 'unknown', 'computed-count', None
         db.set_district_zoning(leaid, style, name=name, state=state, note=note,

@@ -165,6 +165,7 @@ PROVENANCE = {
     'computed-single':         'inferred',    # districts: only 1 school at this level
     'computed-sampled':        'inferred',    # districts: zone sampling found multiple schools
     'computed-count':          'inferred',    # districts: school count, not yet sampled
+    'computed-spread':         'inferred',    # districts: multiple schools with geographic spread
     'not-rated-pk':            'inferred',    # school_ratings: grade range below testing (PK/K-2)
 
     # Human-verified (never expires, never auto-overwritten)
