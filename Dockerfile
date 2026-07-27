@@ -5,6 +5,10 @@ WORKDIR /app
 # Copy environment file first for caching
 COPY environment.yml .
 
+# curl is needed by download_data.sh (Census TIGER boundary downloads)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create conda environment
 RUN mamba env create -f environment.yml && \
     mamba clean -afy
