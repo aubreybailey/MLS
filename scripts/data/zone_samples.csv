@@ -1,54 +1,62 @@
 lat,lon,school_name,district,state,source
-42.2505,-71.6218,Annie E. Fales Elementary School,Westborough School District,MA,greatschools-assigned
-42.2604,-71.6224,Annie E. Fales Elementary School,Westborough School District,MA,greatschools-assigned
-42.2647,-71.6122,Armstrong Elementary School,Westborough School District,MA,greatschools-assigned
+42.3776,-71.6372,Berlin Memorial School,Berlin-Boylston School District,MA,greatschools-assigned
+42.3313,-71.7397,Boylston Elementary School,Berlin-Boylston School District,MA,greatschools-assigned
+42.3544,-71.6884,Boylston Elementary School,Berlin-Boylston School District,MA,greatschools-assigned
+42.4534,-71.3464,Alcott Elementary School,Concord School District,MA,greatschools-assigned
+42.4517,-71.3974,Thoreau Elementary School,Concord School District,MA,greatschools-assigned
+42.4294,-71.3819,Willard School,Concord School District,MA,greatschools-assigned
+42.4405,-71.3897,Willard School,Concord School District,MA,greatschools-assigned
+42.4414,-71.3641,Willard School,Concord School District,MA,greatschools-assigned
+42.4375,-71.5082,Center School,Nashoba School District,MA,greatschools-assigned
+42.4529,-71.5921,Florence Sawyer School,Nashoba School District,MA,greatschools-assigned
+42.4682,-71.6759,Mary Rowlandson Elementary School,Nashoba School District,MA,greatschools-assigned
+42.275,-71.395,Brown,Natick School District,MA,greatschools-assigned
+42.28651,-71.67472,Fannie E. Proctor,Northborough School District,MA,greatschools-assigned
+42.303,-71.648,Fannie E. Proctor,Northborough School District,MA,greatschools-assigned
+42.306,-71.663,Lincoln Street,Northborough School District,MA,greatschools-assigned
+42.313,-71.658,Lincoln Street,Northborough School District,MA,greatschools-assigned
+42.3156,-71.67893,Lincoln Street,Northborough School District,MA,greatschools-assigned
+42.308,-71.628,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
+42.318,-71.62,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
+42.322,-71.628,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
+42.32,-71.642,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
+42.335,-71.645,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
+42.34,-71.636,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
+42.2607,-71.395,Pine Hill Elementary School,Sherborn School District,MA,greatschools-assigned
+42.2607,-71.3746,Pine Hill Elementary School,Sherborn School District,MA,greatschools-assigned
 42.2653,-71.7488,Calvin Coolidge School,Shrewsbury School District,MA,greatschools-assigned
 42.269,-71.7359,Calvin Coolidge School,Shrewsbury School District,MA,greatschools-assigned
-42.2702,-71.6231,Armstrong Elementary School,Westborough School District,MA,greatschools-assigned
-42.2728,-71.723,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.2745,-71.6129,Elsie A Hastings Elementary School,Westborough School District,MA,greatschools-assigned
-42.2746,-71.7213,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
 42.2784,-71.7084,Floral Street School,Shrewsbury School District,MA,greatschools-assigned
-42.2789,-71.6027,Elsie A Hastings Elementary School,Westborough School District,MA,greatschools-assigned
+42.284,-71.6938,Floral Street School,Shrewsbury School District,MA,greatschools-assigned
+42.2947,-71.6981,Floral Street School,Shrewsbury School District,MA,greatschools-assigned
+42.2728,-71.723,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
+42.2746,-71.7213,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
 42.2789,-71.731,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
 42.2826,-71.7181,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.284,-71.6938,Floral Street School,Shrewsbury School District,MA,greatschools-assigned
 42.2854,-71.7256,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.28651,-71.67472,Fannie E. Proctor,Northborough School District,MA,greatschools-assigned
 42.2882,-71.7035,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
 42.2891,-71.7127,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
 42.2925,-71.7131,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.2947,-71.6981,Floral Street School,Shrewsbury School District,MA,greatschools-assigned
 42.299,-71.7077,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.303,-71.648,Fannie E. Proctor,Northborough School District,MA,greatschools-assigned
 42.3055,-71.7023,Sherwood Middle School,Shrewsbury School District,MA,greatschools-assigned
-42.306,-71.663,Lincoln Street,Northborough School District,MA,greatschools-assigned
-42.308,-71.628,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
-42.313,-71.658,Lincoln Street,Northborough School District,MA,greatschools-assigned
-42.3156,-71.67893,Lincoln Street,Northborough School District,MA,greatschools-assigned
-42.318,-71.62,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
-42.32,-71.642,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
-42.322,-71.628,Marguerite E. Peaslee,Northborough School District,MA,greatschools-assigned
-42.3313,-71.7397,Boylston Elementary School,Berlin-Boylston School District,MA,greatschools-assigned
-42.335,-71.645,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
-42.3376,-71.8511,Dawson Elementary School,Wachusett School District,MA,greatschools-assigned
-42.34,-71.636,Marion E. Zeh,Northborough School District,MA,greatschools-assigned
-42.3432,-71.8388,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
-42.3472,-71.8549,Dawson Elementary School,Wachusett School District,MA,greatschools-assigned
-42.3487,-71.8265,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
-42.3528,-71.8426,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
-42.3544,-71.6884,Boylston Elementary School,Berlin-Boylston School District,MA,greatschools-assigned
 42.3568,-71.8587,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
 42.3634,-71.8976,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
 42.369,-71.8853,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
 42.373,-71.9014,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
+42.401,-71.8605,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3376,-71.8511,Dawson Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3472,-71.8549,Dawson Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3892,-71.9442,Glenwood Elementary School,Wachusett School District,MA,greatschools-assigned
+42.4128,-71.7769,Houghton Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3432,-71.8388,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3487,-71.8265,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
+42.3528,-71.8426,Mayo Elementary School,Wachusett School District,MA,greatschools-assigned
 42.3752,-71.814,Major Edwards Elementary School,West Boylston School District,MA,greatschools-assigned
-42.3776,-71.6372,Berlin Memorial School,Berlin-Boylston School District,MA,greatschools-assigned
 42.3808,-71.8017,Major Edwards Elementary School,West Boylston School District,MA,greatschools-assigned
 42.3848,-71.8178,Major Edwards Elementary School,West Boylston School District,MA,greatschools-assigned
-42.3892,-71.9442,Glenwood Elementary School,Wachusett School District,MA,greatschools-assigned
-42.401,-71.8605,Davis Hill Elementary School,Wachusett School District,MA,greatschools-assigned
-42.4128,-71.7769,Houghton Elementary School,Wachusett School District,MA,greatschools-assigned
-42.4375,-71.5082,Center School,Nashoba School District,MA,greatschools-assigned
-42.4529,-71.5921,Florence Sawyer School,Nashoba School District,MA,greatschools-assigned
-42.4682,-71.6759,Mary Rowlandson Elementary School,Nashoba School District,MA,greatschools-assigned
+42.2505,-71.6218,Annie E. Fales Elementary School,Westborough School District,MA,greatschools-assigned
+42.2604,-71.6224,Annie E. Fales Elementary School,Westborough School District,MA,greatschools-assigned
+42.2647,-71.6122,Armstrong Elementary School,Westborough School District,MA,greatschools-assigned
+42.2702,-71.6231,Armstrong Elementary School,Westborough School District,MA,greatschools-assigned
+42.2745,-71.6129,Elsie A Hastings Elementary School,Westborough School District,MA,greatschools-assigned
+42.2789,-71.6027,Elsie A Hastings Elementary School,Westborough School District,MA,greatschools-assigned

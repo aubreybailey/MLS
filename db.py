@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS districts (
     name         TEXT,
     state        TEXT,
     zoning_style TEXT DEFAULT 'unknown',
+    source       TEXT DEFAULT 'computed-count',
     checked_at   TEXT,
     note         TEXT
 );
@@ -141,6 +142,39 @@ CREATE TABLE IF NOT EXISTS city_coverage (
 
 # Ratings are published annually.
 RATING_TTL_DAYS = 90
+
+# ---------------------------------------------------------------------------
+# Data provenance taxonomy
+# ---------------------------------------------------------------------------
+# Every `source` value in every table maps to one of these categories so a
+# consumer can answer "did this come from a government database, or did we
+# scrape/infer it?" The mapping is also the canonical list of legal source
+# values: anything else is a bug.
+PROVENANCE = {
+    # Government databases (authoritative, citable)
+    'nces':                    'government',  # schools: NCES Common Core of Data
+    'sabs':                    'government',  # districts: NCES School Attendance Boundary Survey
+    'census-tiger':            'government',  # district boundaries: Census TIGER/Line
+
+    # Scraped from third-party websites (GreatSchools)
+    'greatschools':            'scraped',     # school_ratings: live GreatSchools rating scrape
+    'cityspire-2020':          'scraped',     # school_ratings: GreatSchools via CitySpire ~2020 dump
+    'greatschools-assigned':   'scraped',     # zone_samples: "Schools by Address" browser render
+
+    # Inferred / computed from data we hold
+    'computed-single':         'inferred',    # districts: only 1 school at this level
+    'computed-sampled':        'inferred',    # districts: zone sampling found multiple schools
+    'computed-count':          'inferred',    # districts: school count, not yet sampled
+
+    # Human-verified (never expires, never auto-overwritten)
+    'manual':                  'manual',      # school_ratings: hand-entered rating
+    'manual-research':         'manual',      # districts: verified via deliberate testing
+}
+
+
+def provenance_of(source: str) -> str:
+    """Category for a source label: 'government', 'scraped', 'inferred', or 'manual'."""
+    return PROVENANCE.get(source, 'unknown')
 
 
 def _connect():
@@ -451,9 +485,10 @@ VALID_ZONING = ('zoned', 'choice', 'single', 'unknown')
 
 
 def set_district_zoning(leaid: str, zoning_style: str, name: str = None,
-                        state: str = None, note: str = None) -> None:
-    """Record how a district assigns schools. Never raises. name/state/note only
-    overwrite when provided, so a later zoning update doesn't blank them."""
+                        state: str = None, note: str = None,
+                        source: str = None) -> None:
+    """Record how a district assigns schools. Never raises. name/state/note/source
+    only overwrite when provided, so a later zoning update doesn't blank them."""
     if zoning_style not in VALID_ZONING:
         return
     try:
@@ -461,13 +496,15 @@ def set_district_zoning(leaid: str, zoning_style: str, name: str = None,
         with _lock:
             conn = _connect()
             conn.execute(
-                'INSERT INTO districts (leaid, name, state, zoning_style, checked_at, note) '
-                'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(leaid) DO UPDATE SET '
+                'INSERT INTO districts (leaid, name, state, zoning_style, source, checked_at, note) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(leaid) DO UPDATE SET '
                 'zoning_style=excluded.zoning_style, checked_at=excluded.checked_at, '
                 'name=COALESCE(excluded.name, districts.name), '
                 'state=COALESCE(excluded.state, districts.state), '
+                'source=COALESCE(excluded.source, districts.source), '
                 'note=COALESCE(excluded.note, districts.note)',
-                (leaid, name, (state or '').upper() or None, zoning_style, now, note),
+                (leaid, name, (state or '').upper() or None, zoning_style,
+                 source, now, note),
             )
             conn.commit()
     except Exception:

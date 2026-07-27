@@ -36,11 +36,22 @@ KNOWN_CHOICE = {
 
 
 def _sabs_leaids(state: str) -> set:
+    """Districts covered by the NCES SABS attendance boundary survey.
+    Tries the GeoPackage first (needs geopandas), then falls back to districts
+    already tagged with source='sabs' in a prior run (the note persists)."""
     try:
         import geopandas as gpd
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             'data', 'attendance_zones.gpkg')
         return set(gpd.read_file(path, layer=state.upper())['leaid'])
+    except Exception:
+        pass
+    # Fallback: districts previously classified from SABS
+    try:
+        conn = sqlite3.connect(db.DB_PATH)
+        return {r[0] for r in conn.execute(
+            "SELECT leaid FROM districts WHERE state = ? AND source = 'sabs'",
+            (state.upper(),))}
     except Exception:
         return set()
 
@@ -77,16 +88,18 @@ def main():
     for leaid, name in rows:
         n = counts.get(leaid, 0)
         if leaid in KNOWN_CHOICE:
-            style, note = 'choice', KNOWN_CHOICE[leaid]
+            style = 'choice'
+            src, note = 'manual-research', KNOWN_CHOICE[leaid]
         elif n <= 1:
-            style, note = 'single', None
+            style, src, note = 'single', 'computed-single', None
         elif leaid in sabs:
-            style, note = 'zoned', 'SABS attendance boundaries'
+            style, src, note = 'zoned', 'sabs', 'SABS attendance boundaries'
         elif len(sampled.get(leaid, ())) >= 2:
-            style, note = 'zoned', 'sampled: multiple assigned schools'
+            style, src, note = 'zoned', 'computed-sampled', 'sampled: multiple assigned schools'
         else:
-            style, note = 'unknown', None
-        db.set_district_zoning(leaid, style, name=name, state=state, note=note)
+            style, src, note = 'unknown', 'computed-count', None
+        db.set_district_zoning(leaid, style, name=name, state=state, note=note,
+                               source=src)
         tally[style] = tally.get(style, 0) + 1
 
     print(f"{state}: classified {len(rows)} districts")
