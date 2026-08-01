@@ -167,6 +167,7 @@ PROVENANCE = {
     'computed-count':          'inferred',    # districts: school count, not yet sampled
     'computed-spread':         'inferred',    # districts: multiple schools with geographic spread
     'not-rated-pk':            'inferred',    # school_ratings: grade range below testing (PK/K-2)
+    'not-rated-alt':           'inferred',    # school_ratings: alt/therapeutic/virtual/transition program
 
     # Human-verified (never expires, never auto-overwritten)
     'manual':                  'manual',      # school_ratings: hand-entered rating
@@ -263,7 +264,8 @@ def upsert_schools(rows: list) -> int:
 # higher-priority one, so the CitySpire ~2020 seed can be layered underneath
 # without ever clobbering a fresh scrape or a hand-entered value, regardless of
 # the order scripts happen to run in.
-SOURCE_PRIORITY = {'manual': 3, 'not-rated-pk': 3, 'greatschools': 2, 'cityspire-2020': 1}
+SOURCE_PRIORITY = {'manual': 3, 'not-rated-pk': 3, 'not-rated-alt': 3,
+                    'greatschools': 2, 'cityspire-2020': 1}
 
 
 def _source_rank(source: str) -> int:
@@ -301,9 +303,9 @@ def put_school_rating(ncessch: str, rating, matched_name: str = '',
 def _rating_is_fresh(rating, fetched_at, source,
                      max_age_days: int = RATING_TTL_DAYS) -> bool:
     """Is a stored rating still usable? Hand-entered rows (source='manual')
-    never expire -- you entered them deliberately. 'not-rated-pk' rows are
-    intentionally NULL (school below testing grades) and also never expire."""
-    if source == 'not-rated-pk':
+    never expire -- you entered them deliberately. 'not-rated-*' rows are
+    intentionally NULL (structurally unratable) and also never expire."""
+    if source in ('not-rated-pk', 'not-rated-alt'):
         return True
     if rating is None:
         return False
@@ -414,11 +416,16 @@ def schools_in_district(leaid: str, level: str = None) -> list:
     When we can't determine the assigned school, every school in the district
     is a candidate, so the minimum rating here is a floor the address cannot do
     worse than. Rows with rating=None are returned too -- the caller needs to
-    know the bound is incomplete."""
+    know the bound is incomplete.
+
+    Alt/therapeutic/virtual programs (source='not-rated-alt') are excluded --
+    a house is never automatically zoned into these, so they aren't candidates
+    and shouldn't drag down the floor or inflate the unrated count."""
     try:
         sql = ('SELECT s.ncessch, s.name, s.level, s.enrollment, r.rating '
                'FROM schools s LEFT JOIN school_ratings r ON r.ncessch = s.ncessch '
-               'WHERE s.leaid = ?')
+               'WHERE s.leaid = ?'
+               " AND COALESCE(r.source, '') != 'not-rated-alt'")
         args = [leaid]
         if level:
             sql += ' AND s.level = ?'

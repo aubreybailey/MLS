@@ -104,6 +104,7 @@ def step_ratings(state, args):
     rc = run(cmd, args.dry_run)
     if not args.dry_run:
         _tag_pk_schools(state)
+        _tag_alt_schools(state)
     return rc
 
 
@@ -128,6 +129,46 @@ def _tag_pk_schools(state):
         db.put_school_rating(nc, None, f'grades end at {ghi}, below testing',
                              source='not-rated-pk')
     print(f"  tagged {len(unrated_pk)} PK/K-2 schools as not-rated-pk")
+
+
+_ALT_KEYWORDS = [
+    'therapeutic', 'alternative', 'adult tech',
+    'gateway to college', 'opportunity academy',
+    'virtual', 'academy for success',
+    'cooperative alternative', 'day school',
+    'transition academy', 'transitions academy',
+]
+
+
+def _tag_alt_schools(state):
+    """Tag alt/therapeutic/virtual/transition programs as 'not-rated-alt'.
+    These aren't geographically assigned neighborhood schools — a house is
+    never automatically zoned into an adult academy or a therapeutic day
+    program, so they shouldn't be the floor in a district-min calculation."""
+    sys.path.insert(0, ROOT)
+    import db
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    unrated = conn.execute(
+        'SELECT s.ncessch, s.name, s.grade_hi, s.enrollment FROM schools s '
+        'LEFT JOIN school_ratings r ON s.ncessch = r.ncessch '
+        'WHERE s.state = ? AND r.ncessch IS NULL', (state,)).fetchall()
+    tagged = 0
+    for nc, name, ghi, enroll in unrated:
+        nl = name.lower()
+        if ghi == 15:
+            reason = 'post-secondary transition (grade 15)'
+        elif any(kw in nl for kw in _ALT_KEYWORDS):
+            reason = next(kw for kw in _ALT_KEYWORDS if kw in nl)
+        elif enroll is not None and enroll <= 30 and \
+                any(h in nl for h in ('academy', 'prep')):
+            reason = f'tiny alt ({enroll} students)'
+        else:
+            continue
+        db.put_school_rating(nc, None, reason, source='not-rated-alt')
+        tagged += 1
+    if tagged:
+        print(f"  tagged {tagged} alt/therapeutic/virtual schools as not-rated-alt")
 
 
 def step_samples(state, args):
@@ -189,16 +230,26 @@ def verify(state):
                       WHERE s.state = ? AND s.level = 'elementary'
                       AND r.source = 'not-rated-pk'""", (state,))
             tot = q("SELECT COUNT(*) FROM schools WHERE state = ? AND level = 'elementary'", (state,))
-            gap = tot - rated - pk
+            alt_elem = q("""SELECT COUNT(*) FROM schools s JOIN school_ratings r
+                         ON r.ncessch = s.ncessch
+                         WHERE s.state = ? AND s.level = 'elementary'
+                         AND r.source = 'not-rated-alt'""", (state,))
+            alt_all = q("""SELECT COUNT(*) FROM school_ratings
+                       WHERE source = 'not-rated-alt'
+                       AND ncessch IN (SELECT ncessch FROM schools WHERE state = ?)""", (state,))
+            gap = tot - rated - pk - alt_elem
             print(f"  elementary rated       {rated}/{tot} ({rated / tot * 100:.0f}%)" if tot else "")
             if pk:
                 print(f"  PK/K-2 (no testing)   {pk}  (tagged, not a gap)")
+            if alt_all:
+                print(f"  alt/virtual/etc       {alt_all}  (tagged, not neighborhood schools)")
             if gap:
                 print(f"  truly unrated         {gap}")
             full = q("""SELECT COUNT(*) FROM (
                           SELECT s.leaid FROM schools s
                           LEFT JOIN school_ratings r ON r.ncessch = s.ncessch
                           WHERE s.state = ? AND s.level = 'elementary'
+                          AND COALESCE(r.source, '') NOT IN ('not-rated-alt')
                           GROUP BY s.leaid
                           HAVING SUM(CASE WHEN r.rating IS NULL THEN 1 ELSE 0 END) = 0)""", (state,))
             dtot = q("SELECT COUNT(DISTINCT leaid) FROM schools WHERE state = ? AND level = 'elementary'", (state,))
