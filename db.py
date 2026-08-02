@@ -165,6 +165,9 @@ PROVENANCE = {
     'cityspire-2020':          'scraped',     # school_ratings: GreatSchools via CitySpire ~2020 dump
     'greatschools-assigned':   'scraped',     # zone_samples: "Schools by Address" browser render
 
+    # MLS listing metadata (agent-entered school assignment, public filing)
+    'mls-inferred':            'public-filing',  # zone_samples: school assignment from MLS disclosure
+
     # Inferred / computed from data we hold
     'computed-single':         'inferred',    # districts: only 1 school at this level
     'computed-sampled':        'inferred',    # districts: zone sampling found multiple schools

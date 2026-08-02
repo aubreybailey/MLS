@@ -58,12 +58,26 @@ not simplify or remove the error handling for these:
 
 The zone sample CSV lives at `scripts/data/zone_samples.csv` (committed).
 
+### MLS zone inference (separate pipeline, not part of setup_state)
+
+| Script | Purpose |
+|---|---|
+| `harvest_mls_zones.py` | Scrape Realtor.com for school assignment labels (~6-10h) |
+| `match_mls_to_nces.py` | Match MLS school names to NCES IDs (75% match rate) |
+| `load_mls_zone_samples.py` | Load matched points into zone_samples (source='mls-inferred') |
+| `build_inferred_zones.py` | Build zone polygons → `data/inferred_attendance_zones.gpkg` |
+
+Run in order. The harvest CSV (`scripts/data/mls_school_labels.csv`) is the
+expensive artifact; commit it so downstream steps are reproducible without
+re-scraping. The matched CSV and GeoPackage are derived and gitignored.
+
 ## Provenance rules
 
 Every rating source must be registered in `db.py::PROVENANCE` before use.
 The provenance taxonomy has four categories:
 
 - `government` — can redistribute
+- `public-filing` — factual data from public disclosures (MLS), can redistribute
 - `scraped` — personal use only
 - `inferred` — computed from data we hold, can redistribute
 - `manual` — hand-entered, can redistribute

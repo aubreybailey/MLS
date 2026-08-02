@@ -19,3 +19,6 @@ output/
 
 # NCES SABS attendance zones - rebuild with scripts/build_attendance_zones.py
 /data/attendance_zones.gpkg
+
+# Published product: inferred attendance zone polygons
+!/data/inferred_attendance_zones.gpkg
