@@ -363,7 +363,7 @@ def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
     if source != 'zoned-unrated' and zoning != 'choice' \
             and lat is not None and lon is not None:
         s = db.nearest_zone_sample(lat, lon, level=level)
-        if s and s.get('ncessch'):
+        if s and s.get('ncessch') and s.get('confidence', 0) >= 0.15:
             r = db.get_school_rating(s['ncessch'])
             if r is not None:
                 return r, None, s.get('school_name', ''), 'zoned-inferred', 0
