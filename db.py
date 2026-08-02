@@ -159,8 +159,9 @@ PROVENANCE = {
     # Government test scores (authoritative, citable)
     'mcas':                    'government',  # school_ratings: MA DESE MCAS proficiency -> rating
 
-    # Scraped from third-party websites (GreatSchools)
+    # Scraped from third-party websites (GreatSchools, Niche)
     'greatschools':            'scraped',     # school_ratings: live GreatSchools rating scrape
+    'niche':                   'scraped',     # school_ratings: Niche proficiency -> rating conversion
     'cityspire-2020':          'scraped',     # school_ratings: GreatSchools via CitySpire ~2020 dump
     'greatschools-assigned':   'scraped',     # zone_samples: "Schools by Address" browser render
 
@@ -268,7 +269,7 @@ def upsert_schools(rows: list) -> int:
 # without ever clobbering a fresh scrape or a hand-entered value, regardless of
 # the order scripts happen to run in.
 SOURCE_PRIORITY = {'manual': 3, 'not-rated-pk': 3, 'not-rated-alt': 3,
-                    'greatschools': 2, 'mcas': 2, 'cityspire-2020': 1}
+                    'greatschools': 2, 'mcas': 2, 'niche': 2, 'cityspire-2020': 1}
 
 
 def _source_rank(source: str) -> int:
