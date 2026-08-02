@@ -22,9 +22,10 @@ Steps
   3. zones        NCES SABS attendance boundaries       -> data/attendance_zones.gpkg
   4. schools      NCES CCD school directory             -> cache/schools.db
   5. ratings      GreatSchools ratings per school       -> cache/schools.db
-                  (also tags PK/K-2 schools as not-rated-pk)
-  6. samples      load committed zone-sample seed       -> cache/schools.db
-  7. classify     district zoning style classification  -> cache/schools.db
+                  (also tags PK/K-2 and alt programs)
+  6. mcas         MA DESE MCAS proficiency -> rating    -> cache/schools.db
+  7. samples      load committed zone-sample seed       -> cache/schools.db
+  8. classify     district zoning style classification  -> cache/schools.db
 
 Usage
     python scripts/setup_state.py --state MA
@@ -44,7 +45,7 @@ ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, 'data')
 
 STEPS = ('boundaries', 'geopackage', 'zones', 'schools', 'ratings',
-         'samples', 'classify')
+         'mcas', 'samples', 'classify')
 
 
 def run(cmd, dry_run=False) -> int:
@@ -171,6 +172,19 @@ def _tag_alt_schools(state):
         print(f"  tagged {tagged} alt/therapeutic/virtual schools as not-rated-alt")
 
 
+def step_mcas(state, args):
+    """MCAS state test proficiency, converted to a 1-10 rating. Fills gaps
+    where GreatSchools has no rating but the school administers state tests."""
+    if state != 'MA':
+        print(f"  MCAS is Massachusetts-only (skipping {state})")
+        return 0
+    cmd = [sys.executable, os.path.join(HERE, 'backfill_mcas.py'),
+           '--state', state]
+    if args.dry_run:
+        cmd.append('--dry-run')
+    return run(cmd, args.dry_run)
+
+
 def step_samples(state, args):
     """Load committed zone-sample seed into the zone_samples table."""
     csv_path = os.path.join(HERE, 'data', 'zone_samples.csv')
@@ -191,6 +205,7 @@ HANDLERS = {
     'boundaries': step_boundaries,
     'geopackage': step_geopackage,
     'zones': step_zones,
+    'mcas': step_mcas,
     'schools': step_schools,
     'ratings': step_ratings,
     'samples': step_samples,
