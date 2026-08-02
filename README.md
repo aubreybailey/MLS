@@ -3,8 +3,11 @@
 Find rentals filtered by the quality of the school an address actually feeds
 into — not the district average, and not the nearest school.
 
-Streamlit web UI plus a CLI, backed by Realtor.com listings, Census school
-district boundaries, NCES attendance zones, and GreatSchools ratings.
+Streamlit web UI plus a CLI. The default build uses **only public government
+data** — Census boundaries, the NCES school directory, federal attendance
+zones, and state test scores — so the database is fully reproducible and
+redistributable. An optional `--non-free` flag adds scraped GreatSchools
+ratings for broader coverage at the cost of clean provenance.
 
 ---
 
@@ -27,6 +30,63 @@ nearby. That number is close to useless for deciding where to live, because:
 
 So this app resolves the actual assigned school where that is knowable, reports
 a guaranteed floor where it isn't, and says plainly which one you're looking at.
+
+---
+
+## Data sources
+
+Everything in the default build comes from a published government dataset.
+
+| Source | What | Agency |
+|---|---|---|
+| [Census TIGER 2023](https://www2.census.gov/geo/tiger/TIGER2023/) | School district boundary polygons | US Census Bureau |
+| [NCES CCD](https://educationdata.urban.org/documentation/) | School directory (name, location, enrollment, grades) | Dept. of Education |
+| [NCES SABS 2015-16](https://nces.ed.gov/programs/edge/SABS) | Attendance zone boundaries (voluntary, partial) | Dept. of Education |
+| [MA DESE MCAS](https://educationtocareer.data.mass.gov/) | School-level test proficiency → 1-10 rating | MA state government |
+| [Census Gazetteer](https://www2.census.gov/geo/docs/maps-data/data/gazetteer/) | City/town list for autocomplete | US Census Bureau |
+
+**Runtime dependencies** (not in the database, used live during searches):
+
+| Source | What | License |
+|---|---|---|
+| [Nominatim / Overpass](https://nominatim.openstreetmap.org/) | Geocoding + ZIP lookup | ODbL (open) |
+| [Realtor.com](https://www.realtor.com/) (via `homeharvest`) | Rental and sale listings | Terms of service |
+
+### Optional: non-free overlay
+
+Pass `--non-free` to `setup_state.py` to also scrape GreatSchools ratings.
+These are higher-coverage (1,583 schools vs ~1,597 from MCAS, but with much
+better matching in non-MA states) and include GreatSchools' proprietary
+composite score. The tradeoff: scraped data can't be redistributed, so a
+`--non-free` build is for personal use only.
+
+```bash
+python scripts/setup_state.py --state MA --non-free
+```
+
+GreatSchools and MCAS ratings have the same source priority, so whichever
+runs second wins for schools covered by both. In a `--non-free` build, GS
+runs first (step 5b) and MCAS gap-fills (step 5); for a clean build, MCAS
+is the sole rating source.
+
+### How MCAS ratings are derived
+
+MCAS proficiency (% Meeting or Exceeding Expectations, averaged across ELA
+and Math) is converted to a 1-10 scale using thresholds calibrated against
+1,566 schools that have both a GreatSchools rating and MCAS results:
+
+| Proficiency | Rating | | Proficiency | Rating |
+|---|---|---|---|---|
+| < 10.5% | 1 | | 38–46.5% | 6 |
+| 10.5–17% | 2 | | 46.5–55.5% | 7 |
+| 17–22% | 3 | | 55.5–64.5% | 8 |
+| 22–29.5% | 4 | | 64.5–73% | 9 |
+| 29.5–38% | 5 | | ≥ 73% | 10 |
+
+Measured accuracy against GreatSchools on the calibration set: MAE 0.82,
+83.7% within ±1, 97.3% within ±2, near-zero systematic bias (mean delta
+-0.04). The district-min floor — the number users actually filter on — is
+unchanged in 47.8% of districts and within ±1 in 89.6%.
 
 ---
 
@@ -72,7 +132,7 @@ filter applies to that level, and every level resolves the same way:
 | `zoned` | The address's **assigned school**, from NCES attendance boundaries | exact |
 | `district-sole` | The district has one school at this level | exact |
 | `district-min` | The **worst-rated** school in the district (`*_best` shows the best) | a floor |
-| `zoned-unrated` | School identified, but GreatSchools has no rating for it | unknown |
+| `zoned-unrated` | School identified, but no rating source covers it | unknown |
 | `area-avg` | ~3mi radius average — last resort | **not a bound** |
 
 The important property: **the rating is never optimistic and never null.** When
@@ -101,10 +161,13 @@ itself is incomplete — the true worst case could be lower.
 idempotent and resumable; an interrupted run is fixed by running it again.
 
 ```bash
-python scripts/setup_state.py --state MA
-python scripts/setup_state.py --state MA --only ratings
+python scripts/setup_state.py --state MA              # free (government only)
+python scripts/setup_state.py --state MA --non-free    # + GreatSchools
+python scripts/setup_state.py --state MA --only mcas   # re-run one step
 python scripts/setup_state.py --state MA --dry-run
 ```
+
+### Default (free) pipeline
 
 | Step | Source | Produces |
 |---|---|---|
@@ -112,17 +175,31 @@ python scripts/setup_state.py --state MA --dry-run
 | `geopackage` | the above | `data/school_districts.gpkg` (one indexed file) |
 | `zones` | NCES SABS | `data/attendance_zones.gpkg` |
 | `schools` | NCES CCD | `schools` table in `cache/schools.db` |
-| `ratings` | GreatSchools | `school_ratings` table |
+| `mcas` | MA DESE | `school_ratings` table (also tags PK/alt) |
+| `classify` | computed | `districts` table zoning style |
 
-It ends with a verification summary, so a partial build is visible rather than
-silent:
+### Additional steps with `--non-free`
+
+| Step | Source | Produces |
+|---|---|---|
+| `ratings` | GreatSchools (scraped) | `school_ratings` table |
+| `samples` | GreatSchools address oracle | `zone_samples` table |
+
+It ends with a verification summary and provenance report:
 
 ```
 district GeoPackage    273MB
 attendance zones       8MB
 schools                1862
-elementary rated       781/1001 (78%)
-districts fully rated  126/269
+elementary rated       978/1001 (98%)
+districts fully rated  247/269
+
+Provenance:
+  mcas                       1597  (government)
+  not-rated-pk                166  (inferred)
+  not-rated-alt                67  (inferred)
+
+  All 1830 ratings trace to government sources
 ```
 
 Disk: ~555MB of boundary data, ~2MB database. All of it is regenerable and none
@@ -130,7 +207,7 @@ is in git.
 
 ### Why this is a script and not a list of steps
 
-Three of those sources fail in ways that produce **silently incomplete data**:
+Three upstream sources fail in ways that produce **silently incomplete data**:
 
 - **census.gov rate-limits with HTTP 429.** The original download script read
   that as "this state has no such district type" and, under `set -e`, aborted
@@ -143,8 +220,45 @@ Three of those sources fail in ways that produce **silently incomplete data**:
 - **GreatSchools answers an empty search with HTTP 404**, not an error, so rural
   points returned nothing.
 
-All three are handled (retry with backoff, pagination, radius escalation), but
-they're the reason reproducing this by hand is a bad idea.
+The first is relevant to all builds; the second and third apply only to
+`--non-free`. All three are handled (retry with backoff, pagination, radius
+escalation).
+
+---
+
+## Limits of the data
+
+| Source | Limitation |
+|---|---|
+| **NCES SABS** | **Discontinued after 2015-16, and voluntary — only 196/403 MA districts (49%)** |
+| Census TIGER | Solid; verified against NCES with zero substantive disagreement across MA |
+| NCES CCD | Public schools only; private schools won't match |
+| MCAS | MA-only; ~98% coverage of ratable schools; MAE 0.82 vs GreatSchools |
+| Realtor.com | Listing availability varies; `nearby_schools` field exists but is rarely populated |
+
+**The SABS limitation is the one that matters.** Zones are ~10 years old, so a
+district that has redrawn boundaries since will be wrong and we cannot detect
+which. And Boston, Lowell, Lawrence, Quincy, Shrewsbury and **Northborough**
+have no zones at all — those always fall back to a district floor and say so.
+
+### Name matching
+
+GreatSchools (in `--non-free` mode) gives no NCES id, so ratings are linked by
+name plus geography. This is deliberately **not** fuzzy matching: on real
+failures, correct pairs scored 0.67–0.83 on character similarity while *wrong*
+pairs scored 0.76–0.86. `Holland Elementary` vs `Holmes Elementary` — different
+schools — scored highest of all at 0.86. The distributions overlap completely,
+so no threshold works, and an embedding model would be worse: it compresses
+away the proper noun that identifies a school.
+
+Instead: token containment, abbreviation expansion, exact-match preference,
+grade-span overlap, and a locally-rare-token fallback. Ambiguity that survives
+all of it returns nothing, because attaching the wrong school's rating is worse
+than having none.
+
+```bash
+python scripts/test_school_match.py     # 32 cases, all from real failures
+```
 
 ---
 
@@ -180,7 +294,7 @@ a dashed border means the listing has flags.
 
 ## Daily notifications (ntfy)
 
-Set filters in the web UI, pick a topic, click **🔔 Create notification** — it
+Set filters in the web UI, pick a topic, click **Create notification** — it
 saves to `notify/saved_searches.json`. The notifier pushes only listings that
 are **new since the last run** (first run seeds silently).
 
@@ -196,42 +310,6 @@ docker compose run --rm notify --list
 
 Dedup state lives in `notify/notify_state.json`. The `notify` service uses host
 networking so it can reach an ntfy server on your LAN.
-
----
-
-## Data sources and their limits
-
-| Source | Used for | Limitation |
-|---|---|---|
-| Realtor.com (via `homeharvest`) | Listings | `nearby_schools` exists but is never populated |
-| Census TIGER 2023 | District boundaries | Solid; verified against NCES with zero substantive disagreement across MA |
-| **NCES SABS** | **Attendance zones** | **Discontinued after 2015-16, and voluntary — only 192/322 MA districts (60%)** |
-| NCES CCD | School directory | Public schools only; private schools won't match |
-| GreatSchools | Ratings | Scraped; ~78% of MA elementary schools matched |
-
-**The SABS limitation is the one that matters.** Zones are ~10 years old, so a
-district that has redrawn boundaries since will be wrong and we cannot detect
-which. And Boston, Lowell, Lawrence, Quincy, Shrewsbury and **Northborough**
-have no zones at all — those always fall back to a district floor and say so.
-
-### Name matching
-
-GreatSchools gives no NCES id, so ratings are linked by name plus geography.
-This is deliberately **not** fuzzy matching: on real failures, correct pairs
-scored 0.67–0.83 on character similarity while *wrong* pairs scored 0.76–0.86.
-`Holland Elementary` vs `Holmes Elementary` — different schools — scored highest
-of all at 0.86. The distributions overlap completely, so no threshold works, and
-an embedding model would be worse: it compresses away the proper noun that
-identifies a school.
-
-Instead: token containment, abbreviation expansion, exact-match preference,
-grade-span overlap, and a locally-rare-token fallback. Ambiguity that survives
-all of it returns nothing, because attaching the wrong school's rating is worse
-than having none.
-
-```bash
-python scripts/test_school_match.py     # 32 cases, all from real failures
-```
 
 ---
 
@@ -251,14 +329,18 @@ scripts/
   build_geopackage.py       TIGER shapefiles -> indexed GeoPackage
   build_attendance_zones.py NCES SABS -> attendance zones
   build_schools_table.py    NCES CCD -> schools table
-  backfill_school_ratings.py GreatSchools -> school_ratings
+  backfill_mcas.py          MCAS proficiency -> school_ratings (primary)
+  backfill_school_ratings.py GreatSchools -> school_ratings (--non-free)
   school_district_lookup.py District + attendance zone lookups
   school_match.py           GreatSchools <-> NCES name matching
   greatschools_scraper.py   Ratings scraper (paged)
+  analyze_mcas_loss.py      Quantify MCAS vs GreatSchools accuracy
+  validate_voronoi.py       Validate geometric zone inference against SABS
   test_school_match.py      Matcher regression tests
 data/                   Boundary data (~555MB, gitignored, regenerable)
 cache/                  schools.db (gitignored, regenerable)
 output/                 CLI results (gitignored)
+docs/                   Implementation plans
 ```
 
 ---

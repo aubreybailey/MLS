@@ -130,6 +130,8 @@ def main():
                     help='CCD directory year for crosswalk (default 2022)')
     ap.add_argument('--mcas-year', type=int, default=2025,
                     help='MCAS results year (default 2025)')
+    ap.add_argument('--primary', action='store_true',
+                    help='rate ALL schools with MCAS data, not just unrated')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
     state = args.state.upper()
@@ -142,17 +144,21 @@ def main():
     mcas = fetch_mcas(args.mcas_year)
     print(f"  {len(mcas)} schools with data")
 
-    # Find unrated schools in our DB
     import sqlite3
     conn = sqlite3.connect(db.DB_PATH)
-    unrated = conn.execute(
-        'SELECT s.ncessch, s.name FROM schools s '
-        'LEFT JOIN school_ratings r ON s.ncessch = r.ncessch '
-        'WHERE s.state = ? AND r.ncessch IS NULL', (state,)).fetchall()
+    if args.primary:
+        candidates = conn.execute(
+            'SELECT s.ncessch, s.name FROM schools s WHERE s.state = ?',
+            (state,)).fetchall()
+    else:
+        candidates = conn.execute(
+            'SELECT s.ncessch, s.name FROM schools s '
+            'LEFT JOIN school_ratings r ON s.ncessch = r.ncessch '
+            'WHERE s.state = ? AND r.ncessch IS NULL', (state,)).fetchall()
     conn.close()
 
     filled = 0
-    for ncessch, name in unrated:
+    for ncessch, name in candidates:
         dese = crosswalk.get(ncessch, '')
         if dese not in mcas:
             continue
@@ -167,8 +173,9 @@ def main():
             print(f"  {name:<45} prof={m['proficiency']:.0%} -> {rating}")
         filled += 1
 
-    verb = "would fill" if args.dry_run else "filled"
-    print(f"\n{verb} {filled}/{len(unrated)} unrated schools from MCAS data")
+    mode = "primary" if args.primary else "gap-fill"
+    verb = "would rate" if args.dry_run else "rated"
+    print(f"\n{verb} {filled}/{len(candidates)} schools from MCAS data ({mode} mode)")
     return 0
 
 

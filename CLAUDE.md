@@ -31,8 +31,9 @@ docker run --rm -e PROJ_DATA=/opt/conda/envs/rental-search/share/proj \
   -w /app/output --entrypoint python mls-cli /app/search.py "Northborough, MA" --limit 3 --no-map
 
 # Build the school data (once per state; idempotent + resumable):
-python scripts/setup_state.py --state MA           # runs all 5 steps in order
-python scripts/setup_state.py --state MA --only ratings
+python scripts/setup_state.py --state MA              # free (government data only)
+python scripts/setup_state.py --state MA --non-free    # + GreatSchools ratings
+python scripts/setup_state.py --state MA --only mcas   # re-run one step
 
 # Tests (plain scripts, no pytest):
 docker run --rm -v "$(pwd)/scripts:/app/scripts:ro" --entrypoint python mls-cli /app/scripts/test_school_match.py

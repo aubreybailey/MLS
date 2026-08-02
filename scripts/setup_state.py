@@ -2,35 +2,32 @@
 """
 Build every school data layer for one state, in dependency order.
 
-Reproducibility matters here because the layers were assembled interactively
-and several steps have non-obvious failure modes that produced silently
-incomplete data:
-
-  * census.gov rate-limits bulk downloads with HTTP 429, which the old download
-    script recorded as "this state has no such district type" -- that silently
-    cost every Northeast SCSD file.
-  * GreatSchools paginates at 25 results regardless of radius, so a single
-    query in a dense area sees a fraction of what's there.
-  * GreatSchools answers an empty search with HTTP 404, not an error.
+By default, the pipeline uses only freely available government data sources
+(Census TIGER boundaries, NCES school directory, NCES SABS attendance zones,
+and state test proficiency data).  Pass --non-free to also run the
+GreatSchools rating scrape and zone-sample collection, which produce better
+coverage but cannot be redistributed.
 
 Each step is idempotent and resumable: re-running skips work already done, so
 a partial or interrupted run is fixed by running it again.
 
-Steps
+Steps (default / free pipeline)
   1. boundaries   Census TIGER district shapefiles      -> data/tl_2023_*
   2. geopackage   merge into one indexed GeoPackage     -> data/school_districts.gpkg
   3. zones        NCES SABS attendance boundaries       -> data/attendance_zones.gpkg
   4. schools      NCES CCD school directory             -> cache/schools.db
-  5. ratings      GreatSchools ratings per school       -> cache/schools.db
+  5. mcas         state test proficiency -> rating       -> cache/schools.db
                   (also tags PK/K-2 and alt programs)
-  6. mcas         MA DESE MCAS proficiency -> rating    -> cache/schools.db
-  7. samples      load committed zone-sample seed       -> cache/schools.db
-  8. classify     district zoning style classification  -> cache/schools.db
+  6. classify     district zoning style classification  -> cache/schools.db
+
+Additional steps with --non-free
+  5b. ratings     GreatSchools ratings per school       -> cache/schools.db
+  5c. samples     load committed zone-sample seed       -> cache/schools.db
 
 Usage
     python scripts/setup_state.py --state MA
+    python scripts/setup_state.py --state MA --non-free
     python scripts/setup_state.py --state MA --only ratings
-    python scripts/setup_state.py --state MA --skip boundaries,zones
     python scripts/setup_state.py --state MA --dry-run
 """
 
@@ -44,8 +41,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, 'data')
 
-STEPS = ('boundaries', 'geopackage', 'zones', 'schools', 'ratings',
-         'mcas', 'samples', 'classify')
+STEPS = ('boundaries', 'geopackage', 'zones', 'schools', 'mcas',
+         'ratings', 'samples', 'classify')
+
+NON_FREE_STEPS = {'ratings', 'samples'}
 
 
 def run(cmd, dry_run=False) -> int:
@@ -173,16 +172,26 @@ def _tag_alt_schools(state):
 
 
 def step_mcas(state, args):
-    """MCAS state test proficiency, converted to a 1-10 rating. Fills gaps
-    where GreatSchools has no rating but the school administers state tests."""
+    """MCAS state test proficiency, converted to a 1-10 rating.
+
+    In the default (free) pipeline, MCAS is the primary rating source and
+    also runs PK/alt tagging afterward.  With --non-free, GreatSchools runs
+    first and MCAS gap-fills only unrated schools (PK/alt tagging is handled
+    by the ratings step instead)."""
     if state != 'MA':
         print(f"  MCAS is Massachusetts-only (skipping {state})")
         return 0
     cmd = [sys.executable, os.path.join(HERE, 'backfill_mcas.py'),
            '--state', state]
+    if not args.non_free:
+        cmd.append('--primary')
     if args.dry_run:
         cmd.append('--dry-run')
-    return run(cmd, args.dry_run)
+    rc = run(cmd, args.dry_run)
+    if not args.non_free and not args.dry_run:
+        _tag_pk_schools(state)
+        _tag_alt_schools(state)
+    return rc
 
 
 def step_samples(state, args):
@@ -269,6 +278,25 @@ def verify(state):
                           HAVING SUM(CASE WHEN r.rating IS NULL THEN 1 ELSE 0 END) = 0)""", (state,))
             dtot = q("SELECT COUNT(DISTINCT leaid) FROM schools WHERE state = ? AND level = 'elementary'", (state,))
             print(f"  districts fully rated  {full}/{dtot}   (these give a hard worst-case floor)")
+            # Provenance summary
+            sources = conn.execute(
+                'SELECT r.source, COUNT(*) FROM school_ratings r '
+                'JOIN schools s ON s.ncessch = r.ncessch '
+                'WHERE s.state = ? GROUP BY r.source ORDER BY COUNT(*) DESC',
+                (state,)).fetchall()
+            gov = sum(c for s, c in sources
+                      if db.provenance_of(s) in ('government', 'inferred'))
+            scraped = sum(c for s, c in sources
+                         if db.provenance_of(s) == 'scraped')
+            print(f"\n  Provenance:")
+            for src, cnt in sources:
+                prov = db.provenance_of(src)
+                print(f"    {src:<25} {cnt:>5}  ({prov})")
+            if scraped:
+                print(f"\n  {scraped} ratings from scraped sources "
+                      f"(run without --non-free for a clean build)")
+            else:
+                print(f"\n  All {gov} ratings trace to government sources")
     except Exception as e:
         print(f"  db check failed: {e}")
 
@@ -281,6 +309,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--state', default='MA')
+    ap.add_argument('--non-free', action='store_true',
+                    help='also run GreatSchools scrape and zone-sample steps')
     ap.add_argument('--only', help=f"comma-separated subset of: {', '.join(STEPS)}")
     ap.add_argument('--skip', help='comma-separated steps to skip')
     ap.add_argument('--sabs-zip', help='path to an already-downloaded SABS_1516.zip')
@@ -294,6 +324,8 @@ def main():
 
     state = args.state.upper()
     todo = list(STEPS)
+    if not args.non_free:
+        todo = [s for s in todo if s not in NON_FREE_STEPS]
     if args.only:
         want = [s.strip() for s in args.only.split(',')]
         bad = [s for s in want if s not in STEPS]
@@ -305,7 +337,8 @@ def main():
         skip = {s.strip() for s in args.skip.split(',')}
         todo = [s for s in todo if s not in skip]
 
-    print(f"Building school data for {state}: {' -> '.join(todo)}")
+    mode = 'non-free (GreatSchools + MCAS)' if args.non_free else 'free (government data only)'
+    print(f"Building school data for {state} [{mode}]: {' -> '.join(todo)}")
     started = time.time()
     failed = []
     for name in todo:
