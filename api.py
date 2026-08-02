@@ -360,10 +360,9 @@ def _resolve_level(level: str, zones: dict, leaid: str, ratings: dict,
     zoning = db.get_district_zoning(leaid) if leaid else 'unknown'
 
     # No SABS zone: fall back to a nearby sampled assignment before the floor.
-    # Sampled points currently exist only for elementary.
-    if source != 'zoned-unrated' and level == 'elementary' and zoning != 'choice' \
+    if source != 'zoned-unrated' and zoning != 'choice' \
             and lat is not None and lon is not None:
-        s = db.nearest_zone_sample(lat, lon)
+        s = db.nearest_zone_sample(lat, lon, level=level)
         if s and s.get('ncessch'):
             r = db.get_school_rating(s['ncessch'])
             if r is not None:

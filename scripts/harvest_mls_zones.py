@@ -119,6 +119,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--state', default='MA')
+    ap.add_argument('--listing-type', default='for_sale',
+                    choices=['for_sale', 'sold'],
+                    help='listing type to scrape (default: for_sale)')
     ap.add_argument('--past-days', type=int, default=180)
     ap.add_argument('--limit-cities', type=int, default=0,
                     help='stop after N cities (0 = all)')
@@ -135,8 +138,13 @@ def main():
 
     print(f"Found {len(cities)} cities in {args.state}")
 
+    # Output file varies by listing type so sold and for_sale don't collide
+    output_csv = OUTPUT_CSV
+    if args.listing_type == 'sold':
+        output_csv = OUTPUT_CSV.replace('.csv', '_sold.csv')
+
     # Resume support
-    completed_cities = load_completed_cities(OUTPUT_CSV)
+    completed_cities = load_completed_cities(output_csv)
     # Track completed by "City, ST" key
     completed_keys = set()
     for city in cities:
@@ -154,9 +162,9 @@ def main():
         remaining = remaining[:args.limit_cities]
 
     # Open output file (append mode for resume)
-    write_header = not os.path.exists(OUTPUT_CSV) or os.path.getsize(OUTPUT_CSV) == 0
-    os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
-    outfile = open(OUTPUT_CSV, 'a', newline='')
+    write_header = not os.path.exists(output_csv) or os.path.getsize(output_csv) == 0
+    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+    outfile = open(output_csv, 'a', newline='')
     writer = csv.DictWriter(outfile, fieldnames=FIELDNAMES)
     if write_header:
         writer.writeheader()
@@ -171,7 +179,7 @@ def main():
 
         try:
             results = scrape_property(
-                location, listing_type='for_sale',
+                location, listing_type=args.listing_type,
                 past_days=args.past_days,
                 extra_property_data=True,
                 limit=200,
@@ -225,7 +233,7 @@ def main():
           f"listings across {len(remaining)} cities")
     if errors:
         print(f"  {errors} cities failed (re-run to retry)")
-    print(f"Output: {OUTPUT_CSV}")
+    print(f"Output: {output_csv}")
     return 0
 
 

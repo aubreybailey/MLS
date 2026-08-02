@@ -59,6 +59,7 @@ def main():
             school_name=r['nces_name'],
             district=r.get('leaid', ''),
             state=r.get('state', 'MA'),
+            level=r.get('level', 'elementary'),
             source='mls-inferred',
         )
         loaded += 1
