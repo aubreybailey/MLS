@@ -125,6 +125,113 @@ def _knn_confidence(lat, lon, schools, train_samples,
     return best_nc, round(confidence, 3)
 
 
+def _spatial_discord(samples):
+    """Fraction of sample pairs within 0.3mi that disagree on school assignment.
+
+    High discord = complex/irregular zone boundaries. A perfectly Voronoi
+    district scores ~0; a gerrymandered one scores high."""
+    if len(samples) < 5:
+        return 0.0
+    pairs = disagree = 0
+    for i, (lat1, lon1, nc1) in enumerate(samples):
+        for j in range(i + 1, len(samples)):
+            lat2, lon2, nc2 = samples[j]
+            d = _haversine(lat1, lon1, lat2, lon2)
+            if d <= 0.3:
+                pairs += 1
+                if nc1 != nc2:
+                    disagree += 1
+    if pairs == 0:
+        return 0.0
+    return disagree / pairs
+
+
+def _area_sq_miles(samples):
+    """Rough bounding-box area from sample extent."""
+    if len(samples) < 2:
+        return 0.01
+    lats = [s[0] for s in samples]
+    lons = [s[1] for s in samples]
+    lat_span = (max(lats) - min(lats)) * 69.0
+    mid_lat = sum(lats) / len(lats)
+    lon_span = (max(lons) - min(lons)) * 69.0 * math.cos(math.radians(mid_lat))
+    return max(0.01, lat_span * lon_span)
+
+
+def _print_targets(per_district, testable, schools_by_district, conn):
+    """Rank districts by how much they'd benefit from denser sampling."""
+    import csv
+    import io
+
+    choice_leaids = set()
+    choice_rows = conn.execute(
+        "SELECT leaid FROM districts WHERE zoning_style = 'choice'"
+    ).fetchall()
+    choice_leaids = {r[0] for r in choice_rows}
+
+    targets = []
+    for d in per_district:
+        leaid = d['leaid']
+        if leaid in choice_leaids:
+            continue
+        samples = testable[leaid]
+        n_schools = d['n_schools']
+        n_samples = d['n_samples']
+        accuracy = d.get('5-nn', d.get('1-nn', 0))
+
+        discord = _spatial_discord(samples)
+        area = _area_sq_miles(samples)
+        density = n_samples / max(1, n_schools) / max(0.1, area)
+
+        # Look up district name
+        row = conn.execute(
+            'SELECT name FROM districts WHERE leaid = ?', (leaid,)).fetchone()
+        name = row[0] if row else leaid
+
+        error_rate = 1.0 - accuracy
+        # Priority: high error + high discord + low density = needs sampling
+        # Normalize density inversely (sparse = high priority)
+        inv_density = 1.0 / max(0.01, density)
+        priority = error_rate * 0.5 + discord * 0.3 + min(1.0, inv_density * 0.1) * 0.2
+
+        targets.append({
+            'leaid': leaid, 'name': name, 'n_schools': n_schools,
+            'n_samples': n_samples, 'accuracy': accuracy,
+            'discord': discord, 'density': round(density, 1),
+            'area_sqmi': round(area, 1), 'priority': round(priority, 3),
+        })
+
+    targets.sort(key=lambda t: -t['priority'])
+
+    print(f"\n{'='*100}")
+    print(f"DISTRICTS NEEDING DENSER SAMPLING (ranked by priority)")
+    print(f"{'='*100}")
+    print(f"\n{'District':<35} {'Schools':>7} {'Samples':>8} {'5-NN':>6} "
+          f"{'Discord':>8} {'Dens/sch':>8} {'Area mi²':>8} {'Priority':>8}")
+    print(f"{'-'*35} {'-'*7} {'-'*8} {'-'*6} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+
+    for t in targets[:40]:
+        print(f"{t['name'][:35]:<35} {t['n_schools']:>7} {t['n_samples']:>8} "
+              f"{t['accuracy']*100:>5.1f}% {t['discord']:>7.1%} "
+              f"{t['density']:>8.1f} {t['area_sqmi']:>8.1f} {t['priority']:>8.3f}")
+
+    # Summary stats
+    high = [t for t in targets if t['priority'] >= 0.3]
+    med = [t for t in targets if 0.2 <= t['priority'] < 0.3]
+    low = [t for t in targets if t['priority'] < 0.2]
+    print(f"\nPriority breakdown: {len(high)} high (≥0.3), "
+          f"{len(med)} medium (0.2-0.3), {len(low)} low (<0.2)")
+    if high:
+        cities = set()
+        for t in high:
+            rows = conn.execute(
+                'SELECT DISTINCT city FROM schools WHERE leaid = ?',
+                (t['leaid'],)).fetchall()
+            cities.update(r[0] for r in rows if r[0])
+        if cities:
+            print(f"High-priority cities to target: {', '.join(sorted(cities))}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -135,6 +242,8 @@ def main():
     ap.add_argument('--sigma', type=float, default=1.5)
     ap.add_argument('--lam', type=float, default=0.4)
     ap.add_argument('--seed', type=int, default=42)
+    ap.add_argument('--targets', action='store_true',
+                    help='identify districts that need denser sampling')
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -152,9 +261,17 @@ def main():
     for lat, lon, nc, leaid in rows:
         by_district[leaid].append((lat, lon, nc))
 
+    # Identify choice districts (zones are meaningless there)
+    choice_leaids = set()
+    choice_rows = conn.execute(
+        "SELECT leaid FROM districts WHERE zoning_style = 'choice'"
+    ).fetchall()
+    choice_leaids = {r[0] for r in choice_rows}
+
     # Only test districts with ≥2 schools and ≥5 samples
     schools_by_district = {}
     testable = {}
+    skipped_choice = {}
     for leaid, samples in by_district.items():
         schools = conn.execute(
             'SELECT s.ncessch, s.lat, s.lon FROM schools s '
@@ -164,16 +281,28 @@ def main():
             'AND s.lat IS NOT NULL AND s.lon IS NOT NULL',
             (leaid, args.level)).fetchall()
         if len(schools) >= 2 and len(samples) >= 5:
-            # Only keep samples that reference schools in our candidate set
             valid_ncs = {s[0] for s in schools}
             valid_samples = [s for s in samples if s[2] in valid_ncs]
             if len(valid_samples) >= 5:
-                testable[leaid] = valid_samples
-                schools_by_district[leaid] = schools
+                if leaid in choice_leaids:
+                    skipped_choice[leaid] = valid_samples
+                    schools_by_district[leaid] = schools
+                else:
+                    testable[leaid] = valid_samples
+                    schools_by_district[leaid] = schools
 
     total_samples = sum(len(s) for s in testable.values())
-    print(f"Testable: {len(testable)} districts, {total_samples} samples "
+    choice_samples = sum(len(s) for s in skipped_choice.values())
+    print(f"Testable: {len(testable)} zoned districts, {total_samples} samples "
           f"({args.level}, {args.folds}-fold CV)")
+    if skipped_choice:
+        names = []
+        for lid in skipped_choice:
+            r = conn.execute('SELECT name FROM districts WHERE leaid=?',
+                             (lid,)).fetchone()
+            names.append(r[0] if r else lid)
+        print(f"Excluded: {len(skipped_choice)} choice districts, "
+              f"{choice_samples} samples ({', '.join(names)})")
 
     METHODS = ['voronoi', '1-nn', '5-nn', '5-nn-conf']
     totals = {m: [0, 0] for m in METHODS}  # [correct, tested]
@@ -306,6 +435,9 @@ def main():
     print(f"\nBest method per district:")
     for m, c in sorted(best_method_counts.items(), key=lambda x: -x[1]):
         print(f"  {m}: {c} districts")
+
+    if args.targets:
+        _print_targets(per_district, testable, schools_by_district, conn)
 
     conn.close()
 
